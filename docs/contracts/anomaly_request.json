@@ -1,0 +1,11 @@
+{
+  "telemetry": [
+    {
+      "device_id": "motor-001",
+      "timestamp": "2026-02-06T10:15:30Z",
+      "temperature_c": 86.2,
+      "vibration_rms": 6.4,
+      "rpm": 1420.5
+    }
+  ]
+}

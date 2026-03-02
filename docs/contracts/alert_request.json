@@ -1,0 +1,7 @@
+{
+  "machine_id": "motor-001",
+  "risk_level": "critical",
+  "anomaly_score": 0.78,
+  "message": "High vibration detected",
+  "channels": ["line", "toast", "sound"]
+}
