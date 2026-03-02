@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 @dataclass(frozen=True)
 class MachineProfile:
     device_id: str
@@ -71,6 +70,7 @@ CORE_MACHINE_PROFILES: list[MachineProfile] = [
         oil_temp_c_base=62.0,
         power_kw_base=7.5,
     ),
+    
     MachineProfile(
         device_id="boiler-feed-401",
         machine_type="boiler_feed_pump",
@@ -87,6 +87,7 @@ CORE_MACHINE_PROFILES: list[MachineProfile] = [
         current_a_base=40.5,
         power_kw_base=22.0,
     ),
+    
     MachineProfile(
         device_id="pack-conveyor-501",
         machine_type="conveyor_gearmotor",
