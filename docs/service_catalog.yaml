@@ -1,0 +1,54 @@
+services:
+  - name: ms1-auth
+    port: 8001
+    database:
+      type: postgresql
+      name: auth
+    responsibilities:
+      - login
+      - issue_jwt
+      - verify_jwt
+      - role_authorization
+    owner_team: Platform
+
+  - name: ms2-ingestor
+    port: 8002
+    database:
+      type: influxdb
+      name: telemetry
+    responsibilities:
+      - receive_telemetry
+      - clean_telemetry
+      - write_timeseries
+    owner_team: Platform
+
+  - name: ms3-ai-engine
+    port: 8003
+    database:
+      type: redis
+      name: cache
+    responsibilities:
+      - score_anomaly
+      - assess_risk
+      - emit_alert_event
+    owner_team: Platform
+
+  - name: ms4-alert
+    port: 8004
+    database: null
+    responsibilities:
+      - consume_alert_event
+      - line_notification
+      - dashboard_notification
+    owner_team: Platform
+
+  - name: ms5-maintenance
+    port: 8005
+    database:
+      type: postgresql
+      name: maintenance
+    responsibilities:
+      - consume_alert_event
+      - create_work_order
+      - track_work_order_status
+    owner_team: Platform

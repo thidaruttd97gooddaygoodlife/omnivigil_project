@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="MS4 Maintenance", version="0.1.0")
+app = FastAPI(title="MS5 Maintenance", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,7 +37,7 @@ _work_orders: List[dict] = []
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "ms4-maintenance"}
+    return {"status": "ok", "service": "ms5-maintenance"}
 
 
 @app.post("/work-orders", response_model=WorkOrderResponse)

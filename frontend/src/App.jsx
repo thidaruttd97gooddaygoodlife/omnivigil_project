@@ -11,10 +11,11 @@ import OrdersCard from "./components/OrdersCard.jsx";
 import Toast from "./components/Toast.jsx";
 
 const API = {
-  ms1: import.meta.env.VITE_MS1_URL || "http://localhost:8001",
-  ms2: import.meta.env.VITE_MS2_URL || "http://localhost:8002",
-  ms3: import.meta.env.VITE_MS3_URL || "http://localhost:8003",
-  ms4: import.meta.env.VITE_MS4_URL || "http://localhost:8004"
+  auth: import.meta.env.VITE_MS1_URL || "http://localhost:8001",
+  ingestor: import.meta.env.VITE_MS2_URL || "http://localhost:8002",
+  ai: import.meta.env.VITE_MS3_URL || "http://localhost:8003",
+  alert: import.meta.env.VITE_MS4_URL || "http://localhost:8004",
+  maintenance: import.meta.env.VITE_MS5_URL || "http://localhost:8005"
 };
 
 const POLL_MS = 3000;
@@ -85,17 +86,18 @@ export default function App() {
   const riskLevel = latestEvent?.risk_level || (healthScore < 45 ? "critical" : healthScore < 65 ? "warning" : "healthy");
 
   const nodeStatus = useMemo(() => ([
-    { name: "edge-node-01", status: services.ms1 === "UP" ? "ready" : "degraded" },
-    { name: "edge-node-02", status: services.ms2 === "UP" ? "ready" : "degraded" },
-    { name: "edge-node-03", status: services.ms3 === "UP" ? "busy" : "degraded" },
-    { name: "edge-node-04", status: services.ms4 === "UP" ? "ready" : "degraded" }
+    { name: "edge-node-01", status: services.ingestor === "UP" ? "ready" : "degraded" },
+    { name: "edge-node-02", status: services.ai === "UP" ? "ready" : "degraded" },
+    { name: "edge-node-03", status: services.alert === "UP" ? "busy" : "degraded" },
+    { name: "edge-node-04", status: services.maintenance === "UP" ? "ready" : "degraded" }
   ]), [services]);
 
   const serviceStatus = useMemo(() => ([
-    { name: "IoT Ingestor", status: services.ms1 === "UP" ? "up" : "down" },
-    { name: "AI Engine", status: services.ms2 === "UP" ? "up" : "down" },
-    { name: "Alert Hub", status: services.ms3 === "UP" ? "busy" : "down" },
-    { name: "Maintenance", status: services.ms4 === "UP" ? "up" : "down" }
+    { name: "MS1 Auth", status: services.auth === "UP" ? "up" : "down" },
+    { name: "MS2 Ingestor", status: services.ingestor === "UP" ? "up" : "down" },
+    { name: "MS3 AI Engine", status: services.ai === "UP" ? "up" : "down" },
+    { name: "MS4 Alert", status: services.alert === "UP" ? "busy" : "down" },
+    { name: "MS5 Maintenance", status: services.maintenance === "UP" ? "up" : "down" }
   ]), [services]);
 
   const temperatureSeries = telemetry.map((item) => item.temperature_c);
@@ -118,10 +120,10 @@ export default function App() {
   const poll = async () => {
     try {
       const [readings, eventData, alertData, workOrderData] = await Promise.all([
-        fetchJson(`${API.ms1}/readings?limit=40`).catch(() => []),
-        fetchJson(`${API.ms2}/events?limit=20`).catch(() => ({ items: [] })),
-        fetchJson(`${API.ms3}/alerts?limit=20`).catch(() => ({ items: [] })),
-        fetchJson(`${API.ms4}/work-orders?limit=20`).catch(() => ({ items: [] }))
+        fetchJson(`${API.ingestor}/readings?limit=40`).catch(() => []),
+        fetchJson(`${API.ai}/events?limit=20`).catch(() => ({ items: [] })),
+        fetchJson(`${API.alert}/alerts?limit=20`).catch(() => ({ items: [] })),
+        fetchJson(`${API.maintenance}/work-orders?limit=20`).catch(() => ({ items: [] }))
       ]);
 
       const nextTelemetry = Array.isArray(readings) ? readings : [];
@@ -163,17 +165,19 @@ export default function App() {
     }
 
     const statusChecks = await Promise.all([
-      fetchJson(`${API.ms1}/health`).catch(() => null),
-      fetchJson(`${API.ms2}/health`).catch(() => null),
-      fetchJson(`${API.ms3}/health`).catch(() => null),
-      fetchJson(`${API.ms4}/health`).catch(() => null)
+      fetchJson(`${API.auth}/health`).catch(() => null),
+      fetchJson(`${API.ingestor}/health`).catch(() => null),
+      fetchJson(`${API.ai}/health`).catch(() => null),
+      fetchJson(`${API.alert}/health`).catch(() => null),
+      fetchJson(`${API.maintenance}/health`).catch(() => null)
     ]);
 
     setServices({
-      ms1: statusChecks[0]?.status === "ok" ? "UP" : "DOWN",
-      ms2: statusChecks[1]?.status === "ok" ? "UP" : "DOWN",
-      ms3: statusChecks[2]?.status === "ok" ? "UP" : "DOWN",
-      ms4: statusChecks[3]?.status === "ok" ? "UP" : "DOWN"
+      auth: statusChecks[0]?.status === "ok" ? "UP" : "DOWN",
+      ingestor: statusChecks[1]?.status === "ok" ? "UP" : "DOWN",
+      ai: statusChecks[2]?.status === "ok" ? "UP" : "DOWN",
+      alert: statusChecks[3]?.status === "ok" ? "UP" : "DOWN",
+      maintenance: statusChecks[4]?.status === "ok" ? "UP" : "DOWN"
     });
   };
 
@@ -184,12 +188,12 @@ export default function App() {
   }, []);
 
   const simulateFail = async () => {
-    await fetchJson(`${API.ms1}/simulate/fail?device_id=motor-001`, { method: "POST" }).catch(() => null);
+    await fetchJson(`${API.ingestor}/simulate/fail?device_id=motor-001`, { method: "POST" }).catch(() => null);
     poll();
   };
 
   const simulateBatch = async () => {
-    await fetchJson(`${API.ms1}/simulate/batch`, {
+    await fetchJson(`${API.ingestor}/simulate/batch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_id: "motor-001", count: 30 })

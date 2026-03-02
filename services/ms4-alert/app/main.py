@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="MS3 Alert", version="0.1.0")
+app = FastAPI(title="MS4 Alert", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +40,7 @@ _alerts: List[dict] = []
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "ms3-alert"}
+    return {"status": "ok", "service": "ms4-alert"}
 
 
 @app.post("/alerts", response_model=AlertResponse)

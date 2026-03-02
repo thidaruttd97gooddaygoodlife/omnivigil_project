@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
 
-app = FastAPI(title="MS2 AI Engine", version="0.1.0")
+app = FastAPI(title="MS3 AI Engine", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,8 +43,8 @@ class AnalyzeResponse(BaseModel):
 
 
 _last_events: List[dict] = []
-_alert_url = os.getenv("ALERT_URL", "http://localhost:8003")
-_maintenance_url = os.getenv("MAINTENANCE_URL", "http://localhost:8004")
+_alert_url = os.getenv("ALERT_URL", "http://localhost:8004")
+_maintenance_url = os.getenv("MAINTENANCE_URL", "http://localhost:8005")
 
 
 def _score(reading: TelemetryReading) -> float:
@@ -99,7 +99,7 @@ def _create_work_order(device_id: str, level: str, alert_id: Optional[str]) -> O
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "ms2-ai-engine"}
+    return {"status": "ok", "service": "ms3-ai-engine"}
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)

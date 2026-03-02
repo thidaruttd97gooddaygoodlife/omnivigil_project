@@ -14,7 +14,7 @@ export default function ServiceGrid({ serviceStatus, services }) {
       ))}
       <div className="service-row">
         <span>Line Gateway</span>
-        <span className={`pill ${services.ms3 === "UP" ? "busy" : "down"}`}>{services.ms3 === "UP" ? "BUSY" : "DOWN"}</span>
+        <span className={`pill ${services.alert === "UP" ? "busy" : "down"}`}>{services.alert === "UP" ? "BUSY" : "DOWN"}</span>
       </div>
     </div>
   );
