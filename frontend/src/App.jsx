@@ -22,27 +22,138 @@ const POLL_MS = 3000;
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
+const SENSOR_DEFINITIONS = {
+  temperature_c: { label: "Temperature", unit: "°C", icon: "🌡️" },
+  vibration_rms: { label: "Vibration", unit: "rms", icon: "📳" },
+  rpm: { label: "RPM", unit: "rpm", icon: "⚙️" },
+  pressure_bar: { label: "Pressure", unit: "bar", icon: "🫧" },
+  flow_lpm: { label: "Flow", unit: "L/min", icon: "💧" },
+  current_a: { label: "Current", unit: "A", icon: "⚡" },
+  oil_temp_c: { label: "Oil Temp", unit: "°C", icon: "🛢️" },
+  humidity_pct: { label: "Humidity", unit: "%", icon: "💨" },
+  power_kw: { label: "Power", unit: "kW", icon: "🔋" }
+};
+
+const SENSOR_GUARDRAILS = {
+  temperature_c: { min: -20, max: 200, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" },
+  vibration_rms: { min: 0, max: 50, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" },
+  rpm: { min: 0, max: 20000, source: "MS2 ingest non-negative enforcement from services/ms2-ingestor/app/main.py" },
+  pressure_bar: { min: 0, max: 25, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" },
+  flow_lpm: { min: 0, max: 5000, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" },
+  current_a: { min: 0, max: 1200, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" },
+  oil_temp_c: { min: -20, max: 220, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" },
+  humidity_pct: { min: 0, max: 100, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" },
+  power_kw: { min: 0, max: 2500, source: "MS2 ingest clamp from services/ms2-ingestor/app/main.py" }
+};
+
+const MACHINE_PROFILE_REFERENCE = {
+  "mix-pump-101": {
+    temperature_c: { base: 61.5, amp: 4.5 },
+    vibration_rms: { base: 1.8, amp: 0.55 },
+    rpm: { base: 1480.0, amp: 35.0 },
+    pressure_bar: { base: 4.2 },
+    flow_lpm: { base: 285.0 },
+    current_a: { base: 28.0 },
+    power_kw: { base: 11.0 }
+  },
+  "filling-comp-201": {
+    temperature_c: { base: 74.0, amp: 5.0 },
+    vibration_rms: { base: 2.2, amp: 0.65 },
+    rpm: { base: 2960.0, amp: 70.0 },
+    pressure_bar: { base: 7.6 },
+    current_a: { base: 33.5 },
+    oil_temp_c: { base: 69.0 },
+    power_kw: { base: 18.5 }
+  },
+  "cnc-spindle-301": {
+    temperature_c: { base: 67.0, amp: 6.5 },
+    vibration_rms: { base: 1.5, amp: 0.45 },
+    rpm: { base: 10800.0, amp: 850.0 },
+    current_a: { base: 24.0 },
+    oil_temp_c: { base: 62.0 },
+    power_kw: { base: 7.5 }
+  },
+  "boiler-feed-401": {
+    temperature_c: { base: 83.0, amp: 4.0 },
+    vibration_rms: { base: 2.6, amp: 0.8 },
+    rpm: { base: 3520.0, amp: 85.0 },
+    pressure_bar: { base: 9.8 },
+    flow_lpm: { base: 118.0 },
+    current_a: { base: 40.5 },
+    power_kw: { base: 22.0 }
+  },
+  "pack-conveyor-501": {
+    temperature_c: { base: 49.0, amp: 3.8 },
+    vibration_rms: { base: 1.2, amp: 0.35 },
+    rpm: { base: 92.0, amp: 6.0 },
+    current_a: { base: 11.5 },
+    humidity_pct: { base: 58.0 },
+    power_kw: { base: 2.2 }
+  }
+};
+
+const buildThreshold = (deviceId, sensorKey) => {
+  const profile = MACHINE_PROFILE_REFERENCE[deviceId]?.[sensorKey];
+  const guardrail = SENSOR_GUARDRAILS[sensorKey];
+
+  if (!profile) {
+    if (!guardrail) {
+      return null;
+    }
+    return {
+      normalMin: guardrail.min,
+      normalMax: guardrail.max,
+      anomalyMin: guardrail.min,
+      anomalyMax: guardrail.max,
+      source: guardrail.source
+    };
+  }
+
+  let normalMin;
+  let normalMax;
+  let anomalyMin;
+  let anomalyMax;
+  let source;
+
+  if (typeof profile.amp === "number") {
+    normalMin = profile.base - profile.amp;
+    normalMax = profile.base + profile.amp;
+    anomalyMin = profile.base - profile.amp * 2;
+    anomalyMax = profile.base + profile.amp * 2;
+    source = "Simulator baseline from services/sim-sensor/app/machine_profiles.py (normal=base±amp, anomaly=base±2×amp)";
+  } else {
+    const normalSpan = Math.max(Math.abs(profile.base) * 0.08, 1);
+    const anomalySpan = Math.max(Math.abs(profile.base) * 0.16, 2);
+    normalMin = profile.base - normalSpan;
+    normalMax = profile.base + normalSpan;
+    anomalyMin = profile.base - anomalySpan;
+    anomalyMax = profile.base + anomalySpan;
+    source = "Simulator baseline from services/sim-sensor/app/machine_profiles.py (derived ±8% normal, ±16% anomaly for sensors without amplitude)";
+  }
+
+  if (guardrail) {
+    normalMin = clamp(normalMin, guardrail.min, guardrail.max);
+    normalMax = clamp(normalMax, guardrail.min, guardrail.max);
+    anomalyMin = clamp(anomalyMin, guardrail.min, guardrail.max);
+    anomalyMax = clamp(anomalyMax, guardrail.min, guardrail.max);
+    source = `${source}; bounded by ${guardrail.source}`;
+  }
+
+  return {
+    normalMin,
+    normalMax,
+    anomalyMin,
+    anomalyMax,
+    source
+  };
+};
+
 const fetchJson = async (url, options) => {
   const response = await fetch(url, options);
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
   return response.json();
-};
-
-const buildPath = (values, width, height, min, max) => {
-  if (!values.length) {
-    return "";
-  }
-  const step = width / (values.length - 1 || 1);
-  return values
-    .map((value, index) => {
-      const x = index * step;
-      const y = height - ((value - min) / (max - min)) * height;
-      const clamped = clamp(y, 6, height - 6);
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${clamped.toFixed(1)}`;
-    })
-    .join(" ");
 };
 
 const playBeep = () => {
@@ -64,12 +175,44 @@ export default function App() {
   const [alerts, setAlerts] = useState([]);
   const [workOrders, setWorkOrders] = useState([]);
   const [services, setServices] = useState({});
+  const [selectedMachine, setSelectedMachine] = useState(null);
+  const [selectedSensor, setSelectedSensor] = useState("temperature_c");
   const [toast, setToast] = useState(null);
   const [soundOn, setSoundOn] = useState(true);
   const lastAlertId = useRef(null);
   const lastEventId = useRef(null);
 
-  const latestReading = telemetry[telemetry.length - 1];
+  const telemetryByMachine = useMemo(() => {
+    const grouped = telemetry.reduce((acc, item) => {
+      if (!acc[item.device_id]) {
+        acc[item.device_id] = [];
+      }
+      acc[item.device_id].push(item);
+      return acc;
+    }, {});
+    return grouped;
+  }, [telemetry]);
+
+  const machineIds = useMemo(() => Object.keys(telemetryByMachine), [telemetryByMachine]);
+
+  useEffect(() => {
+    if (!machineIds.length) {
+      return;
+    }
+    if (!selectedMachine || !machineIds.includes(selectedMachine)) {
+      setSelectedMachine(machineIds[0]);
+    }
+  }, [machineIds, selectedMachine]);
+
+  const selectedMachineTelemetry = selectedMachine ? telemetryByMachine[selectedMachine] || [] : telemetry;
+  const latestReading = selectedMachineTelemetry[selectedMachineTelemetry.length - 1] || telemetry[telemetry.length - 1];
+  const selectedMachineInfo = latestReading
+    ? {
+      machineType: latestReading.machine_type,
+      line: latestReading.line,
+      zone: latestReading.zone
+    }
+    : null;
   const latestEvent = events[events.length - 1];
   const latestAlert = alerts[alerts.length - 1];
 
@@ -100,22 +243,68 @@ export default function App() {
     { name: "MS5 Maintenance", status: services.maintenance === "UP" ? "up" : "down" }
   ]), [services]);
 
-  const temperatureSeries = telemetry.map((item) => item.temperature_c);
-  const vibrationSeries = telemetry.map((item) => item.vibration_rms);
+  const sensorSnapshot = useMemo(() => {
+    if (!latestReading) {
+      return [];
+    }
 
-  const telemetryPath = buildPath(temperatureSeries, 820, 200, 40, 120);
-  const vibrationPath = buildPath(vibrationSeries, 820, 200, 0, 12);
+    return Object.entries(SENSOR_DEFINITIONS)
+      .filter(([sensorKey]) => latestReading[sensorKey] !== null && latestReading[sensorKey] !== undefined)
+      .map(([sensorKey, meta]) => {
+        const threshold = buildThreshold(latestReading.device_id, sensorKey);
+        const value = latestReading[sensorKey];
+        let status = "normal";
+
+        if (threshold) {
+          if (value < threshold.anomalyMin || value > threshold.anomalyMax) {
+            status = "abnormal";
+          } else if (value < threshold.normalMin || value > threshold.normalMax) {
+            status = "warning";
+          }
+        }
+
+        return {
+          key: sensorKey,
+          label: meta.label,
+          unit: meta.unit,
+          icon: meta.icon,
+          value,
+          status,
+          threshold
+        };
+      });
+  }, [latestReading]);
+
+  useEffect(() => {
+    if (!sensorSnapshot.length) {
+      return;
+    }
+    if (!sensorSnapshot.some((sensor) => sensor.key === selectedSensor)) {
+      setSelectedSensor(sensorSnapshot[0].key);
+    }
+  }, [sensorSnapshot, selectedSensor]);
+
+  const selectedSensorSeries = useMemo(() => {
+    return selectedMachineTelemetry
+      .map((item) => item[selectedSensor])
+      .filter((value) => typeof value === "number" && Number.isFinite(value));
+  }, [selectedMachineTelemetry, selectedSensor]);
+
+  const selectedSensorSnapshot = sensorSnapshot.find((sensor) => sensor.key === selectedSensor) || null;
 
   const logEntries = useMemo(() => {
     const time = new Date().toLocaleTimeString();
     return [
       `[${time}] gRPC stream linked to edge gateway`,
       `[${time}] Scheduler: balancing microservice replicas`,
+      selectedMachine
+        ? `[${time}] Selected machine: ${selectedMachine}`
+        : `[${time}] Waiting machine telemetry`,
       latestAlert
         ? `[${time}] Alert dispatched: ${latestAlert.risk_level} ${latestAlert.machine_id}`
         : `[${time}] Alert dispatch queued via RabbitMQ`
     ];
-  }, [latestAlert]);
+  }, [latestAlert, selectedMachine]);
 
   const poll = async () => {
     try {
@@ -188,15 +377,17 @@ export default function App() {
   }, []);
 
   const simulateFail = async () => {
-    await fetchJson(`${API.ingestor}/simulate/fail?device_id=motor-001`, { method: "POST" }).catch(() => null);
+    const machineId = selectedMachine || "mix-pump-101";
+    await fetchJson(`${API.ingestor}/simulate/fail?device_id=${machineId}`, { method: "POST" }).catch(() => null);
     poll();
   };
 
   const simulateBatch = async () => {
+    const machineId = selectedMachine || "mix-pump-101";
     await fetchJson(`${API.ingestor}/simulate/batch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_id: "motor-001", count: 30 })
+      body: JSON.stringify({ device_id: machineId, count: 30 })
     }).catch(() => null);
     poll();
   };
@@ -218,7 +409,19 @@ export default function App() {
           <ServiceGrid serviceStatus={serviceStatus} services={services} />
           <NotificationCard latestAlert={latestAlert} />
         </section>
-        <TelemetryChart latestReading={latestReading} telemetryPath={telemetryPath} vibrationPath={vibrationPath} />
+        <TelemetryChart
+          latestReading={latestReading}
+          machineIds={machineIds}
+          selectedMachine={selectedMachine}
+          onSelectMachine={setSelectedMachine}
+          machineInfo={selectedMachineInfo}
+          selectedSensor={selectedSensor}
+          onSelectSensor={setSelectedSensor}
+          sensorOptions={sensorSnapshot}
+          sensorSnapshot={sensorSnapshot}
+          sensorSeries={selectedSensorSeries}
+          selectedSensorSnapshot={selectedSensorSnapshot}
+        />
         <section className="grid bottom">
           <LogsCard logEntries={logEntries} />
           <MobileSimulator latestAlert={latestAlert} />

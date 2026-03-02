@@ -112,5 +112,6 @@ npm run dev
 - API รวม: `docs/openapi.md`
 - Production checklist: `docs/production_checklist.md`
 - Setup มาตรฐานทีม: `docs/project_setup.md`
+- Handoff ฝั่ง MS2: `docs/ms2_handoff.md`
 
 

@@ -18,7 +18,8 @@
 - `MQTT_BROKER` (default `localhost`)
 - `MQTT_PORT` (default `1883`)
 - `MQTT_TOPIC` (default `omnivigil/telemetry`)
-- `INTERVAL_MS` (default `5000`)
+- `INTERVAL_OPTIONS_SEC` (default `10,20,30`)
+- `INTERVAL_MS` (fallback legacy, default `5000`)
 - `ANOMALY_RATE` (default `0.03`)
 - `MACHINE_COUNT` (default `5`)
 - `MACHINE_IDS` (optional, comma-separated IDs เช่น `mix-pump-101,cnc-spindle-301`)
@@ -54,4 +55,10 @@ echo all > /tmp/force_anomaly
 
 ```bash
 docker compose --profile simulator up -d --build
+```
+
+ตัวอย่างถ้าต้องการคงที่ 20 วินาที:
+
+```bash
+INTERVAL_OPTIONS_SEC=20 docker compose --profile simulator up -d --build
 ```

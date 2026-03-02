@@ -18,6 +18,7 @@ BROKER = os.getenv("MQTT_BROKER", "localhost")
 PORT = int(os.getenv("MQTT_PORT", "1883"))
 TOPIC = os.getenv("MQTT_TOPIC", "omnivigil/telemetry")
 INTERVAL_MS = int(os.getenv("INTERVAL_MS", "5000"))
+INTERVAL_OPTIONS_SEC_RAW = os.getenv("INTERVAL_OPTIONS_SEC", "10,20,30")
 BASE_ANOMALY_RATE = float(os.getenv("ANOMALY_RATE", "0.03"))
 
 MACHINE_COUNT = int(os.getenv("MACHINE_COUNT", "5"))
@@ -44,6 +45,27 @@ class MachineState:
 force_spike_queue: queue.Queue[str] = queue.Queue()
 network_down_until = 0.0
 sent_counter = 0
+
+
+def _parse_interval_options(raw: str) -> list[float]:
+    options: list[float] = []
+    for item in raw.split(","):
+        value = item.strip()
+        if not value:
+            continue
+        try:
+            sec = float(value)
+            if sec > 0:
+                options.append(sec)
+        except ValueError:
+            continue
+
+    if options:
+        return options
+    return [max(INTERVAL_MS / 1000.0, 1.0)]
+
+
+INTERVAL_OPTIONS_SEC = _parse_interval_options(INTERVAL_OPTIONS_SEC_RAW)
 
 
 def now_utc() -> datetime:
@@ -223,7 +245,8 @@ def main() -> None:
 
     selected_profiles = select_profiles()
     machines = [create_machine(profile) for profile in selected_profiles]
-    print(f"[sim] start: machines={len(machines)}, interval={INTERVAL_MS}ms, topic={TOPIC}")
+    interval_text = ",".join(str(int(value)) if float(value).is_integer() else f"{value:.1f}" for value in INTERVAL_OPTIONS_SEC)
+    print(f"[sim] start: machines={len(machines)}, interval_options_sec=[{interval_text}], topic={TOPIC}")
     print("[sim] selected machines:")
     for machine in machines:
         print(f"  - {machine.device_id} ({machine.profile.machine_type}, line={machine.profile.line}, zone={machine.profile.zone})")
@@ -235,8 +258,9 @@ def main() -> None:
     start_manual_command_listener()
 
     while True:
+        sleep_sec = random.choice(INTERVAL_OPTIONS_SEC)
         if maybe_trigger_network_outage():
-            time.sleep(INTERVAL_MS / 1000.0)
+            time.sleep(sleep_sec)
             continue
 
         forced_targets = pick_spike_targets(machines)
@@ -252,7 +276,7 @@ def main() -> None:
         if sent_counter % LOG_EVERY_N_MESSAGES == 0:
             print(f"[sim] published_messages={sent_counter}")
 
-        time.sleep(INTERVAL_MS / 1000.0)
+        time.sleep(sleep_sec)
 
 
 if __name__ == "__main__":

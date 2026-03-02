@@ -376,6 +376,10 @@ body::before {
   margin-top: 6px;
 }
 
+.chart-machine-meta {
+  opacity: 0.9;
+}
+
 .chart-metrics {
   display: flex;
   gap: 24px;
@@ -393,8 +397,165 @@ body::before {
 
 .chart-svg {
   width: 100%;
-  height: 220px;
+  height: 280px;
   margin-top: 16px;
+  border-radius: 14px;
+  background: rgba(8, 15, 32, 0.42);
+}
+
+.machine-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.machine-tab {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(120, 140, 190, 0.25);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.machine-tab.active {
+  border-color: rgba(91, 108, 255, 0.55);
+  background: rgba(91, 108, 255, 0.22);
+}
+
+.sensor-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sensor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(120, 140, 190, 0.22);
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sensor-chip.active {
+  border-color: rgba(255, 122, 26, 0.6);
+  background: rgba(255, 122, 26, 0.16);
+}
+
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.sensor-tile {
+  border: 1px solid rgba(120, 140, 190, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 10px 12px;
+  min-height: 88px;
+}
+
+.sensor-tile.normal {
+  border-color: rgba(75, 210, 106, 0.35);
+}
+
+.sensor-tile.warning {
+  border-color: rgba(255, 189, 89, 0.45);
+}
+
+.sensor-tile.abnormal {
+  border-color: rgba(255, 95, 95, 0.55);
+  background: rgba(255, 95, 95, 0.09);
+}
+
+.sensor-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sensor-value {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.sensor-unit {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sensor-state {
+  margin-top: 6px;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.sensor-state.normal {
+  color: #4bd26a;
+}
+
+.sensor-state.warning {
+  color: #ffbd59;
+}
+
+.sensor-state.abnormal {
+  color: #ff6b6b;
+}
+
+.plot-area {
+  fill: rgba(8, 12, 24, 0.4);
+  stroke: rgba(120, 140, 190, 0.22);
+}
+
+.grid-line {
+  stroke: rgba(130, 150, 196, 0.2);
+  stroke-width: 1;
+}
+
+.grid-line.vertical {
+  stroke-dasharray: 3 6;
+}
+
+.axis-line {
+  stroke: rgba(196, 209, 255, 0.7);
+  stroke-width: 1.2;
+}
+
+.axis-label {
+  fill: #9fb0e6;
+  font-size: 10px;
+}
+
+.axis-y {
+  text-anchor: end;
+}
+
+.normal-band {
+  fill: rgba(75, 210, 106, 0.12);
+}
+
+.threshold-line {
+  stroke-width: 1.4;
+}
+
+.threshold-line.normal {
+  stroke: rgba(75, 210, 106, 0.95);
+}
+
+.threshold-line.anomaly {
+  stroke: rgba(255, 95, 95, 0.95);
+  stroke-dasharray: 6 6;
 }
 
 .line {
@@ -402,14 +563,70 @@ body::before {
   stroke-width: 3;
 }
 
-.line.temperature {
-  stroke: url(#tempGlow);
+.line.selected-sensor {
+  stroke: var(--accent);
   filter: drop-shadow(0 8px 12px rgba(255, 122, 26, 0.35));
 }
 
-.line.vibration {
-  stroke: url(#vibGlow);
-  filter: drop-shadow(0 8px 12px rgba(90, 108, 255, 0.3));
+.latest-dot {
+  fill: var(--accent);
+  stroke: #fff;
+  stroke-width: 1.4;
+}
+
+.chart-legend {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  width: 16px;
+  height: 4px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.legend-swatch.data {
+  background: var(--accent);
+}
+
+.legend-swatch.normal {
+  background: #4bd26a;
+}
+
+.legend-swatch.anomaly {
+  background: #ff6b6b;
+}
+
+.chart-source {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 140, 190, 0.2);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.source-title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: #9fb0e6;
+  text-transform: uppercase;
+}
+
+.source-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .logs .log-row {
@@ -613,5 +830,9 @@ body::before {
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .sensor-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
