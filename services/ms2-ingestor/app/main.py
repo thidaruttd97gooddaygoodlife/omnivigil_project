@@ -17,6 +17,8 @@ from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from pydantic import BaseModel, Field, ValidationError
 
+from app.sensor_standards import evaluate_sensor_value, standards_as_dict
+
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -69,6 +71,16 @@ class BatchRequest(BaseModel):
     count: int = Field(ge=1, le=200, default=10)
 
 
+class QualityRecord(BaseModel):
+    device_id: str
+    timestamp: datetime
+    quality_score: float
+    warning_count: int
+    critical_count: int
+    jump_count: int
+    status_by_sensor: dict[str, str]
+
+
 _ai_engine_url = os.getenv("AI_ENGINE_URL", "").strip()
 _mqtt_broker = os.getenv("MQTT_BROKER", "localhost")
 _mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
@@ -88,6 +100,8 @@ _max_readings = int(os.getenv("MAX_IN_MEMORY_READINGS", "5000"))
 _max_pending_writes = int(os.getenv("MAX_PENDING_INFLUX_WRITES", "10000"))
 _readings: Deque[TelemetryReading] = deque(maxlen=_max_readings)
 _pending_writes: Deque[TelemetryReading] = deque(maxlen=_max_pending_writes)
+_quality_records: Deque[QualityRecord] = deque(maxlen=_max_readings)
+_last_by_device: dict[str, TelemetryReading] = {}
 _state_lock = threading.Lock()
 _stats: dict[str, object] = {
     "mqtt_messages_total": 0,
@@ -95,10 +109,63 @@ _stats: dict[str, object] = {
     "influx_write_success_total": 0,
     "influx_write_error_total": 0,
     "stored_total": 0,
+    "quality_warning_total": 0,
+    "quality_critical_total": 0,
+    "quality_jump_total": 0,
+    "quality_avg_score": 100.0,
     "last_ingest_at": None,
     "last_device_id": None,
     "last_error": None,
 }
+
+_sensor_keys = [
+    "temperature_c",
+    "vibration_rms",
+    "rpm",
+    "pressure_bar",
+    "flow_lpm",
+    "current_a",
+    "oil_temp_c",
+    "humidity_pct",
+    "power_kw",
+]
+
+
+def _build_quality_record(cleaned: TelemetryReading, previous: Optional[TelemetryReading]) -> QualityRecord:
+    status_by_sensor: dict[str, str] = {}
+    warning_count = 0
+    critical_count = 0
+    jump_count = 0
+
+    for key in _sensor_keys:
+        value = getattr(cleaned, key)
+        status = evaluate_sensor_value(key, value)
+        status_by_sensor[key] = status
+        if status == "warning":
+            warning_count += 1
+        elif status == "critical":
+            critical_count += 1
+
+        if previous is not None and value is not None:
+            prev = getattr(previous, key)
+            if prev is not None:
+                delta = abs(value - prev)
+                baseline = max(abs(prev), 1.0)
+                if delta / baseline > 0.5:
+                    jump_count += 1
+
+    penalty = warning_count * 6.0 + critical_count * 20.0 + jump_count * 4.0
+    quality_score = max(0.0, min(100.0, 100.0 - penalty))
+
+    return QualityRecord(
+        device_id=cleaned.device_id,
+        timestamp=cleaned.timestamp,
+        quality_score=round(quality_score, 2),
+        warning_count=warning_count,
+        critical_count=critical_count,
+        jump_count=jump_count,
+        status_by_sensor=status_by_sensor,
+    )
 
 
 def _clean_reading(reading: TelemetryReading) -> TelemetryReading:
@@ -141,7 +208,7 @@ def _init_influx() -> None:
     logger.info("InfluxDB writer initialized bucket=%s org=%s", _influx_bucket, _influx_org)
 
 
-def _write_influx(reading: TelemetryReading) -> bool:
+def _write_influx(reading: TelemetryReading, quality: Optional[QualityRecord] = None) -> bool:
     if not _write_api:
         return False
 
@@ -172,6 +239,14 @@ def _write_influx(reading: TelemetryReading) -> bool:
     if reading.power_kw is not None:
         point = point.field("power_kw", reading.power_kw)
 
+    if quality is not None:
+        point = (
+            point.field("quality_score", quality.quality_score)
+            .field("quality_warning_count", float(quality.warning_count))
+            .field("quality_critical_count", float(quality.critical_count))
+            .field("quality_jump_count", float(quality.jump_count))
+        )
+
     point = point.time(reading.timestamp, WritePrecision.NS)
     _write_api.write(bucket=_influx_bucket, org=_influx_org, record=point)
     return True
@@ -179,14 +254,26 @@ def _write_influx(reading: TelemetryReading) -> bool:
 
 def _store_reading(cleaned: TelemetryReading) -> None:
     with _state_lock:
+        previous = _last_by_device.get(cleaned.device_id)
+    quality = _build_quality_record(cleaned, previous)
+
+    with _state_lock:
         _readings.append(cleaned)
+        _quality_records.append(quality)
+        _last_by_device[cleaned.device_id] = cleaned
         _stats["stored_total"] = int(_stats["stored_total"]) + 1
+        _stats["quality_warning_total"] = int(_stats["quality_warning_total"]) + quality.warning_count
+        _stats["quality_critical_total"] = int(_stats["quality_critical_total"]) + quality.critical_count
+        _stats["quality_jump_total"] = int(_stats["quality_jump_total"]) + quality.jump_count
+        prev_avg = float(_stats["quality_avg_score"])
+        total = int(_stats["stored_total"])
+        _stats["quality_avg_score"] = round(((prev_avg * (total - 1)) + quality.quality_score) / total, 2)
         _stats["last_ingest_at"] = cleaned.timestamp.isoformat()
         _stats["last_device_id"] = cleaned.device_id
 
     _flush_pending_writes(max_items=100)
     try:
-        if _write_influx(cleaned):
+        if _write_influx(cleaned, quality=quality):
             with _state_lock:
                 _stats["influx_write_success_total"] = int(_stats["influx_write_success_total"]) + 1
     except Exception as exc:
@@ -208,9 +295,12 @@ def _flush_pending_writes(max_items: int = 200) -> None:
             if not _pending_writes:
                 return
             pending = _pending_writes.popleft()
+            previous = _last_by_device.get(pending.device_id)
+
+        quality = _build_quality_record(pending, previous)
 
         try:
-            _write_influx(pending)
+            _write_influx(pending, quality=quality)
             with _state_lock:
                 _stats["influx_write_success_total"] = int(_stats["influx_write_success_total"]) + 1
         except Exception as exc:
@@ -306,7 +396,24 @@ def stats() -> dict:
         snapshot = dict(_stats)
         snapshot["in_memory_readings"] = len(_readings)
         snapshot["pending_influx_writes"] = len(_pending_writes)
+        snapshot["quality_records"] = len(_quality_records)
     return snapshot
+
+
+@app.get("/quality/reference")
+def quality_reference() -> dict:
+    return {
+        "version": "1.0",
+        "standards": standards_as_dict(),
+        "disclaimer": "Thresholds are engineering defaults and must be validated against plant OEM/manual/SOP before production alerting.",
+    }
+
+
+@app.get("/quality/readings", response_model=List[QualityRecord])
+def quality_readings(limit: int = 100) -> List[QualityRecord]:
+    with _state_lock:
+        data = list(_quality_records)[-limit:]
+    return data
 
 
 @app.on_event("startup")

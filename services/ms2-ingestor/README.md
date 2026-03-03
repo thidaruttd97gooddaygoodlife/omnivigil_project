@@ -11,6 +11,8 @@ MS2 รับข้อมูลจาก MQTT, ทำความสะอาด
 ## Endpoints
 - `GET /health` : สถานะ service + queue pending writes
 - `GET /stats` : metrics สำหรับตรวจ ingest throughput/error
+- `GET /quality/reference` : เกณฑ์ค่าปกติ/เตือน/วิกฤตของ sensor พร้อมที่มาอ้างอิง
+- `GET /quality/readings` : quality score + flags ต่อ reading สำหรับงาน AI/Data Engineer
 - `POST /ingest` : ingest แบบ HTTP
 - `POST /ingest/analyze` : ingest และลองเรียก AI engine (optional)
 - `POST /simulate/batch` : ยิงข้อมูลชุดทดสอบเข้า MS2 โดยตรง
@@ -95,9 +97,23 @@ curl http://localhost:8002/stats
 - `stored_total`
 - `influx_write_success_total`
 
+4. ตรวจ baseline/reference ของ sensor:
+
+```bash
+curl http://localhost:8002/quality/reference
+```
+
+5. ตรวจคุณภาพข้อมูลล่าสุด (noise/jump/warning/critical):
+
+```bash
+curl "http://localhost:8002/quality/readings?limit=20"
+```
+
 ## Handoff to MS3 Team
 บอกทีม AI ว่า:
 - ข้อมูล telemetry ถูกเก็บใน InfluxDB bucket `telemetry`
 - measurement ชื่อ `telemetry`
 - fields: `temperature_c`, `vibration_rms`, `rpm`, `pressure_bar`, `flow_lpm`, `current_a`, `oil_temp_c`, `humidity_pct`, `power_kw`
 - tags: `device_id`, `machine_type`, `line`, `zone`
+- quality fields ใน Influx: `quality_score`, `quality_warning_count`, `quality_critical_count`, `quality_jump_count`
+- quality API: `GET /quality/reference` และ `GET /quality/readings`
