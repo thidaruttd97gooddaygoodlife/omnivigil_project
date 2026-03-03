@@ -92,6 +92,7 @@ docker compose down
 ```
 
 - รีเซ็ตข้อมูลทั้งหมด (ใช้เมื่อระบบเพี้ยนหนัก)
+- ระวังคำสั่งนี้จะลบข้อมูลใน InfluxDB, Redis, RabbitMQ, PostgreSQL ด้วย
 
 ```powershell
 docker compose down -v
