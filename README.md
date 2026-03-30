@@ -15,6 +15,12 @@ flowchart LR
     FE --> MS1[MS1 Auth Service]
     MS1 --> AuthDB[(PostgreSQL Auth)]
 
+```mermaid
+flowchart LR
+    User((Operator/Engineer)) --> FE[Frontend Dashboard]
+    FE --> MS1[MS1 Auth Service]
+    MS1 --> AuthDB[(PostgreSQL Auth)]
+
     Sensors((Sensors)) --> MQTT[MQTT Broker]
     Simulator((Sensor Simulator)) --> MQTT
     MQTT --> MS2[MS2 IoT Ingestor]
@@ -30,6 +36,7 @@ flowchart LR
     FE --> MS3
     FE --> MS4
     FE --> MS5
+```
 
 ## สิ่งที่ต้องมีในเครื่อง
 - Docker Desktop (ต้องเป็นสถานะ Running)
