@@ -10,6 +10,8 @@
 - MS5 `services/ms5-maintenance`: work order
 - Infra: Mosquitto, InfluxDB, Redis, RabbitMQ, PostgreSQL (2 ตัว)
 
+<img width="1135" height="577" alt="image" src="https://github.com/user-attachments/assets/af585120-ba57-4fc6-938e-930037304d34" />
+
 ## สิ่งที่ต้องมีในเครื่อง
 - Docker Desktop (ต้องเป็นสถานะ Running)
 - GitHub 
