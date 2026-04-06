@@ -152,7 +152,7 @@ services:
     ports:
       - "8003:8003"
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://redis:6379/0
       ALERT_URL: http://ms4-alert:8004
       MAINTENANCE_URL: http://ms5-maintenance:8005
     healthcheck:
@@ -161,8 +161,23 @@ services:
       timeout: 4s
       retries: 10
       start_period: 15s
-    mem_limit: 1024m
+    mem_limit: 512m
     cpus: 0.5
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ms3-worker:
+    build:
+      context: ./services/ms3-ai-engine
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ALERT_URL: http://ms4-alert:8004
+      MAINTENANCE_URL: http://ms5-maintenance:8005
+    mem_limit: 2048m
+    cpus: 1.0
     depends_on:
       redis:
         condition: service_healthy
@@ -171,7 +186,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1 # Change to 'all' if you want to expose all available GPUs
+              count: 1
               capabilities: [gpu]
 
   ms4-alert:

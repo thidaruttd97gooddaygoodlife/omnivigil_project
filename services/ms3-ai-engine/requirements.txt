@@ -9,3 +9,5 @@ torchvision
 torchaudio
 chronos-forecasting
 pandas[pyarrow]
+celery[redis]
+redis
