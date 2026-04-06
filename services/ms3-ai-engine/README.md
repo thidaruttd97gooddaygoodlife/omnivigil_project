@@ -11,6 +11,19 @@ This service is split into two components to handle heavy ML inference efficient
 - **Redis**: Used as the message broker and result backend for Celery.
 - **GPU (Optional but Recommended)**: The worker uses CUDA if available for faster inference.
 
+## Detailed Workflow
+
+1.  **Data Ingestion**: The Web API receives a batch of telemetry data (temperature, vibration, RPM) via the `/analyze` endpoint.
+2.  **Immediate Assessment**: The API immediately calculates a fast, rule-based anomaly score to detect obvious critical failures.
+3.  **Task Offloading**: The telemetry data is serialized and sent to a Redis queue. A Celery task (`run_inference`) is triggered.
+4.  **Forecasting (Worker)**:
+    -   A worker process picks up the task.
+    -   Telemetry is converted to a Pandas DataFrame and resampled to a consistent 10-second interval.
+    -   The **Chronos Forecasting** model predicts the next 24 data points (the next 4 minutes of machine behavior).
+    -   The predicted trends are evaluated against engineering thresholds to calculate a "Proactive Anomaly Score".
+5.  **Result Aggregation**: The Web API awaits the worker's result (or a timeout). It then combines the immediate and proactive scores to determine the final `risk_level` (Low, Medium, High, Critical).
+6.  **Action Triggering**: If the risk is High or Critical, the service automatically dispatches alerts (via MS4) and creates work orders (via MS5).
+
 ## Endpoints
 - `GET /health`: Service health status and operational mode (web/worker).
 - `POST /analyze`: Main inference endpoint. Triggers background forecasting and returns risk levels.
@@ -43,3 +56,4 @@ To run the web server:
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8003
 ```
+
