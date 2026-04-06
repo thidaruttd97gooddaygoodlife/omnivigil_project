@@ -448,17 +448,19 @@ def ingest(reading: TelemetryReading) -> IngestResponse:
 
 
 @app.post("/ingest/analyze", response_model=IngestAnalyzeResponse)
-def ingest_analyze(reading: TelemetryReading) -> IngestAnalyzeResponse:
-    cleaned = _clean_reading(reading)
-    _store_reading(cleaned)
-    analysis, error = _call_ai_engine([cleaned])
+def ingest_analyze(reading: List[TelemetryReading]) -> IngestAnalyzeResponse:
+    logger.info(f"Received batch ingest with {len(reading)} readings")
+    cleaned = [_clean_reading(item) for item in reading]
+    for item in cleaned:
+        _store_reading(item)
+    analysis, error = _call_ai_engine(cleaned)
     with _state_lock:
         stored_count = len(_readings)
 
     return IngestAnalyzeResponse(
         ingest=IngestResponse(
             accepted=True,
-            cleaned=cleaned,
+            cleaned=cleaned[-1],  # Return the last reading as representative
             stored_count=stored_count,
             ingest_id=str(uuid4()),
         ),

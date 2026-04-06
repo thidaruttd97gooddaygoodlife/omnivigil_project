@@ -9,6 +9,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+mock*
 
 # Node
 node_modules/
@@ -21,6 +22,9 @@ dist/
 
 # Notebook
 .ipynb_checkpoints/
-
+.vscode/
 # Logs
 *.log
+
+#vs code 
+.vscode/
