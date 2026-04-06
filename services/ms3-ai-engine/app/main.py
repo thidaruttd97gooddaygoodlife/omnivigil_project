@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -9,6 +10,30 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
+import numpy as np
+import torch
+import pandas as pd  # requires: pip install 'pandas[pyarrow]'
+from chronos import Chronos2Pipeline,BaseChronosPipeline
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+
+
+logging.info(f"PyTorch version: {torch.__version__}")
+logging.info(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    logging.info(f"GPU Name: {torch.cuda.get_device_name(0)}")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+pipeline = BaseChronosPipeline.from_pretrained("Stalemartyr/chronos-finetuned", device_map=device)
+
+if pipeline:
+    logging.info("Successfully loaded Chronos2Pipeline model")
+else:
+    logging.error("Failed to load Chronos2Pipeline model")
+
 
 app = FastAPI(title="MS3 AI Engine", version="0.1.0")
 
@@ -28,6 +53,23 @@ class TelemetryReading(BaseModel):
     vibration_rms: float
     rpm: Optional[float] = None
 
+def telemetry_to_dataframe(telemetry_list: List[TelemetryReading]) -> pd.DataFrame:
+    """Converts a list of TelemetryReading Pydantic models to a Pandas DataFrame."""
+    # Use model_dump() for Pydantic V2 (use .dict() if you are on V1)
+    data = [reading.model_dump() for reading in telemetry_list]
+    return pd.DataFrame(data)
+
+def dataframe_to_telemetry(df: pd.DataFrame) -> List[TelemetryReading]:
+    """Converts a Pandas DataFrame back to a list of TelemetryReading Pydantic models."""
+    # Pandas converts None to NaN for float columns. 
+    # We must replace NaNs with None so Pydantic's Optional[float] accepts it.
+    df_cleaned = df.replace({np.nan: None})
+    
+    # Convert DataFrame rows to a list of dictionaries
+    records = df_cleaned.to_dict(orient='records')
+    
+    # Unpack dictionaries back into Pydantic models
+    return [TelemetryReading(**record) for record in records]
 
 class AnalyzeRequest(BaseModel):
     telemetry: List[TelemetryReading]
@@ -104,8 +146,31 @@ def health() -> dict:
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
+    id_column = "device_id"
+    timestamp_column = "timestamp"
+    target = ["temperature_c", "vibration_rms", "rpm"]
+    prediction_length=12,
+    
     if not request.telemetry:
         return AnalyzeResponse(anomaly_score=0.0, risk_level="low", model="simulated")
+    logging.info(f"Received telemetry for device {request.telemetry[0].device_id} with {len(request.telemetry)} readings")
+    df = telemetry_to_dataframe(request.telemetry)
+    df[timestamp_column] = pd.to_datetime(df[timestamp_column])
+    # sales_context_df = sales_context_df[sales_context_df[id_column]== timeseries_id]
+    df = df.drop(columns=['machine_type','line','zone'])
+    df = df.ffill().fillna(method='bfill').fillna(0)
+    df = df.sort_values(by=[id_column, timestamp_column])
+
+    df_pred = pipeline.predict_df(
+        df,
+    future_df=None,
+    prediction_length=prediction_length,
+    quantile_levels=[0.1, 0.5, 0.9],
+    id_column=id_column,
+    timestamp_column=timestamp_column,
+    target=target,
+    )
+    logging.info(f"Model predictions: {df_pred.head()}")
 
     score = max(_score(item) for item in request.telemetry)
     level = _risk_level(score)
@@ -139,7 +204,7 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     )
 
 
-@app.get("/events")
+@app.get("/ events")
 def events(limit: int = 50) -> dict:
     return {"items": _last_events[-limit:]}
 

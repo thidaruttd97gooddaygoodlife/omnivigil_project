@@ -9,6 +9,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+mock*
 
 # Node
 node_modules/
@@ -24,3 +25,6 @@ dist/
 
 # Logs
 *.log
+
+#vs code 
+.vscode/
