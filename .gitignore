@@ -10,7 +10,7 @@ __pycache__/
 .venv/
 venv/
 mock*
-telemetry_data.*
+
 # Node
 node_modules/
 dist/
