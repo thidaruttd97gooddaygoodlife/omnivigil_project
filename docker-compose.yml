@@ -1,0 +1,277 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/broker/version' -C 1 -W 3 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 128m
+    cpus: 0.25
+
+  influxdb:
+    image: influxdb:2.7
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME: ${INFLUXDB_CLI_CONFIG_NAME:-omnivigil}
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_INIT_USERNAME:-omni}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_INIT_PASSWORD:-omni_password}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-omnivigil}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET:-telemetry}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-omni_token}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 768m
+    cpus: 1.0
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 256m
+    cpus: 0.5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    mem_limit: 512m
+    cpus: 0.75
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${MAINT_POSTGRES_USER:-omni}
+      POSTGRES_PASSWORD: ${MAINT_POSTGRES_PASSWORD:-omni_password}
+      POSTGRES_DB: ${MAINT_POSTGRES_DB:-maintenance}
+    volumes:
+      - postgres_maintenance_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MAINT_POSTGRES_USER:-omni} -d ${MAINT_POSTGRES_DB:-maintenance}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 0.75
+
+  postgres-auth:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${AUTH_POSTGRES_USER:-omni}
+      POSTGRES_PASSWORD: ${AUTH_POSTGRES_PASSWORD:-omni_password}
+      POSTGRES_DB: ${AUTH_POSTGRES_DB:-auth}
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AUTH_POSTGRES_USER:-omni} -d ${AUTH_POSTGRES_DB:-auth}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 0.75
+
+  ms2-ingestor:
+    build:
+      context: ./services/ms2-ingestor
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      INFLUXDB_URL: ${INFLUXDB_URL:-http://influxdb:8086}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-omni_token}
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-omnivigil}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-telemetry}
+      AI_ENGINE_URL: http://ms3-ai-engine:8003
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC: omnivigil/telemetry
+      MQTT_QOS: 1
+      MAX_IN_MEMORY_READINGS: 5000
+      MAX_PENDING_INFLUX_WRITES: 10000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    mem_limit: 512m
+    cpus: 0.75
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+
+  ms3-ai-engine:
+    build:
+      context: ./services/ms3-ai-engine
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      REDIS_URL: redis://redis:6379
+      ALERT_URL: http://ms4-alert:8004
+      MAINTENANCE_URL: http://ms5-maintenance:8005
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    mem_limit: 384m
+    cpus: 0.5
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ms4-alert:
+    build:
+      context: ./services/ms4-alert
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    environment:
+      RABBITMQ_URL: amqp://rabbitmq:5672
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    mem_limit: 256m
+    cpus: 0.5
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  ms5-maintenance:
+    build:
+      context: ./services/ms5-maintenance
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    environment:
+      POSTGRES_URL: postgres://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@postgres:5432/${MAINT_POSTGRES_DB:-maintenance}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    mem_limit: 256m
+    cpus: 0.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ms1-auth:
+    build:
+      context: ./services/ms1-auth
+    volumes:
+      - ./services/ms1-auth/app:/app/app
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      POSTGRES_URL: postgresql://${AUTH_POSTGRES_USER:-omni}:${AUTH_POSTGRES_PASSWORD:-omni_password}@postgres-auth:5432/${AUTH_POSTGRES_DB:-auth}
+      JWT_SECRET: ${JWT_SECRET:-omni_dev_secret_change_me}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_MINUTES: 120
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 20s
+    mem_limit: 384m
+    cpus: 0.5
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+
+  sim-sensor:
+    build:
+      context: ./services/sim-sensor
+    profiles: ["simulator"]
+    restart: unless-stopped
+    environment:
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC: omnivigil/telemetry
+      INTERVAL_OPTIONS_SEC: 10,20,30
+      ANOMALY_RATE: 0.04
+      MACHINE_COUNT: 5
+      NETWORK_DROP_RATE: 0.03
+      NETWORK_DROP_DURATION_SEC: 8
+      MANUAL_TRIGGER_FILE: /tmp/force_anomaly
+      MS6_API_URL: http://ms6-machine:8006
+    mem_limit: 256m
+    cpus: 0.5
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  ms6-machine:
+    build:
+      context: ./services/ms6-machine
+    restart: unless-stopped
+    ports:
+      - "8006:8006"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    mem_limit: 256m
+    cpus: 0.5
+
+volumes:
+  influxdb_data:
+  redis_data:
+  rabbitmq_data:
+  postgres_maintenance_data:
+  postgres_auth_data:

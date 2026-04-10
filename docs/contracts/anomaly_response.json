@@ -1,0 +1,8 @@
+{
+  "anomaly_score": 0.78,
+  "risk_level": "critical",
+  "model": "bi_lstm+pso+isolation_forest (simulated)",
+  "event_id": "c5d7d1b1-02ef-4d7e-9b0b-df4b672d5d9c",
+  "alert_id": "a5bb66b6-9b39-4d21-8d8f-1c0a4c6dd9aa",
+  "work_order_id": "a1b93b56-189a-41ef-8b8b-76a9a46fb7b1"
+}
