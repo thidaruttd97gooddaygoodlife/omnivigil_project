@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # สำหรับรับ request จาก MS3 (POST /work-orders)
 class WorkOrderCreate(BaseModel):
@@ -18,8 +18,7 @@ class WorkOrderResponse(BaseModel):
     status: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # สำหรับรับข้อมูลตอนช่างกด "ซ่อมเสร็จ"
 class CompleteRequest(BaseModel):
