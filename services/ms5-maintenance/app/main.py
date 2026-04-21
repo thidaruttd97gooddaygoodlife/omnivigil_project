@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -64,12 +64,20 @@ def create_work_order(payload: WorkOrderCreate, db: Session = Depends(get_db)):
 @app.get("/work-orders")
 def list_work_orders(
     status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db)
 ):
     query = db.query(WorkOrder)
     if status:
         query = query.filter(WorkOrder.status == status)
-    orders = query.order_by(WorkOrder.created_at.desc()).all()
+    orders = (
+        query
+        .order_by(WorkOrder.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return {"items": [
         {
             "work_order_id": o.id,
