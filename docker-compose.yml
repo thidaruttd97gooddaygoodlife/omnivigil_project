@@ -113,7 +113,7 @@ services:
     mem_limit: 512m
     cpus: 0.75
 
-  postgres-ai:
+  ms3-ai-DB:
     image: postgres:15-alpine
     restart: unless-stopped
     ports:
@@ -175,7 +175,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ALERT_URL: http://ms4-alert:8004
       MAINTENANCE_URL: http://ms5-maintenance:8005
-      POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@postgres-ai:5432/${AI_POSTGRES_DB:-ai_engine}
+      POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
       interval: 10s
@@ -187,7 +187,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      postgres-ai:
+      ms3-ai-DB:
         condition: service_healthy
 
   ms3-worker:
@@ -199,13 +199,13 @@ services:
       REDIS_URL: redis://redis:6379/0
       ALERT_URL: http://ms4-alert:8004
       MAINTENANCE_URL: http://ms5-maintenance:8005
-      POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@postgres-ai:5432/${AI_POSTGRES_DB:-ai_engine}
+      POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
     mem_limit: 2048m
     cpus: 1.0
     depends_on:
       redis:
         condition: service_healthy
-      postgres-ai:
+      ms3-ai-DB:
         condition: service_healthy
 
   ms4-alert:
