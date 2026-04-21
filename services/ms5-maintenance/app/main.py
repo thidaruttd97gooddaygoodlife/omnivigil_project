@@ -72,7 +72,7 @@ def list_work_orders(
     orders = query.order_by(WorkOrder.created_at.desc()).all()
     return {"items": [
         {
-            "id": o.id,
+            "work_order_id": o.id,
             "machine_id": o.machine_id,
             "issue": o.issue,
             "priority": o.priority,
@@ -93,7 +93,7 @@ def accept_work_order(order_id: int, db: Session = Depends(get_db)):
     order.status = "in_progress"
     order.accepted_at = datetime.now(timezone.utc)
     db.commit()
-    return {"message": "Work order accepted", "id": order_id, "status": "in_progress"}
+    return {"message": "Work order accepted", "work_order_id": order_id, "status": "in_progress"}
 
 
 @app.patch("/work-orders/{order_id}/complete")
@@ -111,5 +111,5 @@ def complete_work_order(
     order.action_taken = payload.action_taken
     order.completed_at = datetime.now(timezone.utc)
     db.commit()
-    return {"message": "Work order completed", "id": order_id, "status": "completed"}
+    return {"message": "Work order completed", "work_order_id": order_id, "status": "completed"}
 
