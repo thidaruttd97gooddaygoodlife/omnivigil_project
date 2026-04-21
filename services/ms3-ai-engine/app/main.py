@@ -10,16 +10,21 @@ from uuid import uuid4
 import anyio
 import httpx
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
 
+from app.database import engine, Base, get_db
+from app.models import Event
 from app.tasks import ALL_SENSORS, run_inference_sensor
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MS3 AI Engine (Web Server)", version="0.2.0")
 
@@ -33,7 +38,6 @@ app.add_middleware(
 
 _alert_url = os.getenv("ALERT_URL", "http://localhost:8004")
 _maintenance_url = os.getenv("MAINTENANCE_URL", "http://localhost:8005")
-_last_events: List[dict] = []
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -152,7 +156,7 @@ def health() -> dict:
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
+async def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)) -> AnalyzeResponse:
     if not request.telemetry:
         return AnalyzeResponse(anomaly_score=0.0, risk_level="low", model="simulated")
 
@@ -229,20 +233,20 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
 
     event_id = alert_id = work_order_id = None
     if imm_level in {"high", "critical"}:
-        event_id = str(uuid4())
         alert_id = _dispatch_alert(worst_device, imm_level, score_current)
         work_order_id = _create_work_order(worst_device, imm_level, alert_id)
-        _last_events.append(
-            {
-                "event_id": event_id,
-                "device_id": worst_device,
-                "risk_level": imm_level,
-                "anomaly_score": score_current,
-                "alert_id": alert_id,
-                "work_order_id": work_order_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
+        
+        db_event = Event(
+            device_id=worst_device,
+            risk_level=imm_level,
+            anomaly_score=score_current,
+            alert_id=alert_id,
+            work_order_id=work_order_id
         )
+        db.add(db_event)
+        db.commit()
+        db.refresh(db_event)
+        event_id = str(db_event.event_id)
 
     logging.info(
         f"Analysis complete — overall_score={overall_score:.4f}  "
@@ -261,8 +265,22 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
 
 
 @app.get("/events")
-def events(limit: int = 50) -> dict:
-    return {"items": _last_events[-limit:]}
+def events(limit: int = 50, db: Session = Depends(get_db)) -> dict:
+    db_events = db.query(Event).order_by(Event.timestamp.desc()).limit(limit).all()
+    return {
+        "items": [
+            {
+                "event_id": e.event_id,
+                "device_id": e.device_id,
+                "risk_level": e.risk_level,
+                "anomaly_score": e.anomaly_score,
+                "alert_id": e.alert_id,
+                "work_order_id": e.work_order_id,
+                "timestamp": e.timestamp.isoformat(),
+            }
+            for e in db_events
+        ]
+    }
 
 
 @app.post("/models/refresh")

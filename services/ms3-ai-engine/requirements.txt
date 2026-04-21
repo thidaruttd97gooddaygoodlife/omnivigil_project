@@ -12,3 +12,5 @@ chronos-forecasting
 pandas[pyarrow]
 celery[redis]
 redis
+sqlalchemy
+psycopg2-binary
