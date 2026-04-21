@@ -11,10 +11,18 @@ from app.database import Base, engine, get_db
 from app.models import WorkOrder
 from app.schemas import WorkOrderCreate, WorkOrderResponse, CompleteRequest
 
-# สร้าง table ทุกตารางใน DB ตอน startup (ถ้ายังไม่มี)
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(title="MS5 Maintenance System", version="0.1.0")
+
+
+# สร้าง table ทุกตารางใน DB ตอน startup (ถ้ายังไม่มี)
+@app.on_event("startup")
+def create_tables_on_startup() -> None:
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        # Let FastAPI startup fail explicitly instead of crashing during import.
+        raise
+
 
 app.add_middleware(
     CORSMiddleware,
