@@ -18,5 +18,3 @@ class WorkOrder(Base):
     created_at    = Column(DateTime(timezone=True), default=now_utc)
     accepted_at   = Column(DateTime(timezone=True), nullable=True)
     completed_at  = Column(DateTime(timezone=True), nullable=True)
-
-    
