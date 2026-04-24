@@ -10,8 +10,10 @@ export default function ProductionPage() {
     const [productionData, setProductionData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // RBAC Check
-    if (!hasAccess('supervisor') && user?.role !== 'admin') {
+    // RBAC Check: Allow both Admin and Supervisor
+    const canAccess = user?.role === 'admin' || user?.role === 'supervisor' || hasAccess('supervisor');
+    
+    if (!canAccess) {
         return (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', textAlign: 'center', padding: '40px' }}>
                 <div style={{ background: 'rgba(244, 63, 94, 0.1)', padding: '24px', borderRadius: '50%', marginBottom: '24px' }}>
