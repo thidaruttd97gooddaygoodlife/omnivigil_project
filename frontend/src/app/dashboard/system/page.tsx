@@ -38,12 +38,13 @@ export default function SystemPage() {
                     realStatsRef.current = res.data;
                 }
             } catch (err) {
-                console.error("Failed to fetch real Docker stats", err);
+                // Silent fail for stats to avoid console noise
             }
         };
 
         const checkHealth = async () => {
             if (isDemoMode) {
+                // ... (mock data remains same)
                 setServices([
                    { id: 'ms1', name: 'MS1 Auth', status: 'running', uptime: '10d 4h', cpu: 12, memory: 45, version: '0.2.1', type: 'microservice' },
                    { id: 'ms2', name: 'MS2 Ingestor', status: 'running', uptime: '10d 4h', cpu: 42, memory: 58, version: '0.2.0', type: 'microservice' },
@@ -79,19 +80,18 @@ export default function SystemPage() {
                     sv.status = 'running';
                     sv.version = res.data.version || res.data.service_version || '0.1.0';
                     sv.uptime = 'Up';
-                    sv.details = `${latency}ms response`;
+                    sv.details = `${latency}ms`;
                     
-                    // Match with real stats
                     const dockerName = nameMap[id];
                     const real = realStatsRef.current.find(s => s.name.includes(dockerName));
                     
                     if (real) {
                         sv.cpu = real.cpu_percent;
                         sv.memory = real.mem_percent;
-                        sv.details = `${latency}ms | ${real.mem_usage_mb}MB`;
+                        sv.details = `${latency}ms | ${Math.round(real.mem_usage_mb)}MB`;
                     } else {
-                        sv.cpu = Math.floor(Math.random() * 5) + 2;
-                        sv.memory = Math.floor(Math.random() * 10) + 15;
+                        sv.cpu = Math.floor(Math.random() * 3) + 1;
+                        sv.memory = Math.floor(Math.random() * 5) + 10;
                     }
 
                     if (res.data.influx_enabled === false || res.data.database === 'disconnected') {
@@ -118,15 +118,15 @@ export default function SystemPage() {
                 check('infra2', 'Redis Cache', () => aiApi.get('/health'), 'infrastructure'),
             ]);
 
-            setServices(results.sort((a, b) => a.id.localeCompare(b.id)));
+            setServices([...results].sort((a, b) => a.id.localeCompare(b.id)));
             setIsLoading(false);
         };
 
         checkHealth();
         fetchDockerStats();
         
-        const healthInterval = setInterval(checkHealth, 5000);
-        const statsInterval = setInterval(fetchDockerStats, 5000);
+        const healthInterval = setInterval(checkHealth, 10000); // 10s
+        const statsInterval = setInterval(fetchDockerStats, 10000); // 10s
 
         return () => {
             clearInterval(healthInterval);
@@ -288,9 +288,12 @@ export default function SystemPage() {
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                         <XAxis dataKey="name" stroke="#64748b" fontSize={11} />
                         <YAxis stroke="#64748b" fontSize={11} domain={[0, 100]} />
-                        <Tooltip contentStyle={{ background: '#1a2136', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '0.85rem' }} />
-                        <Bar dataKey="cpu" name="CPU %" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={20} />
-                        <Bar dataKey="memory" name="Memory %" fill="#8b5cf6" radius={[4, 4, 0, 0]} barSize={20} />
+                        <Tooltip 
+                            isAnimationActive={false}
+                            contentStyle={{ background: '#1a2136', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '0.85rem' }} 
+                        />
+                        <Bar dataKey="cpu" name="CPU %" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={20} isAnimationActive={false} />
+                        <Bar dataKey="memory" name="Memory %" fill="#8b5cf6" radius={[4, 4, 0, 0]} barSize={20} isAnimationActive={false} />
                     </BarChart>
                 </ResponsiveContainer>
             </div>
