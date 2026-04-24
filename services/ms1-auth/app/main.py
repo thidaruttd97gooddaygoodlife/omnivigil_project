@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import os
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
 import psycopg
+import docker
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from psycopg.rows import dict_row
+
+# Setup Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ms1-auth")
 
 app = FastAPI(title="MS1 Auth Service", version="0.1.0")
 
@@ -331,3 +337,46 @@ def delete_user(username: str, caller=Depends(_require_admin_or_supervisor)) -> 
                 raise HTTPException(status_code=404, detail="User not found")
         conn.commit()
     return {"status": "deleted", "username": username}
+
+@app.get("/docker/stats")
+def get_docker_stats():
+    """Fetch real-time CPU and Memory stats from Docker Socket."""
+    try:
+        client = docker.from_env()
+        containers = client.containers.list()
+        stats_data = []
+
+        for container in containers:
+            try:
+                stats = container.stats(stream=False)
+                cpu_stats = stats.get("cpu_stats", {})
+                precpu_stats = stats.get("precpu_stats", {})
+                
+                cpu_delta = cpu_stats.get("cpu_usage", {}).get("total_usage", 0) - \
+                           precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+                system_delta = cpu_stats.get("system_cpu_usage", 0) - \
+                              precpu_stats.get("system_cpu_usage", 0)
+                
+                number_cpus = cpu_stats.get("online_cpus", 1)
+                cpu_percent = 0.0
+                if system_delta > 0 and cpu_delta > 0:
+                    cpu_percent = (cpu_delta / system_delta) * number_cpus * 100.0
+
+                mem_usage = stats.get("memory_stats", {}).get("usage", 0)
+                mem_limit = stats.get("memory_stats", {}).get("limit", 1)
+                mem_percent = (mem_usage / mem_limit) * 100.0
+
+                stats_data.append({
+                    "name": container.name,
+                    "id": container.short_id,
+                    "status": container.status,
+                    "cpu_percent": round(cpu_percent, 2),
+                    "mem_percent": round(mem_percent, 2),
+                    "mem_usage_mb": round(mem_usage / (1024 * 1024), 2)
+                })
+            except Exception:
+                continue
+
+        return stats_data
+    except Exception as e:
+        return {"error": str(e)}
