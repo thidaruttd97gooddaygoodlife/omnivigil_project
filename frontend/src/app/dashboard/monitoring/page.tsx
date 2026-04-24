@@ -6,6 +6,7 @@ import { mockMachines, generateSensorData, SensorReading } from '@/lib/mockData'
 import { ingestorApi, machineApi } from '@/lib/api';
 import { Activity, Thermometer, BarChart3, Gauge, RefreshCw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { SensorGuide } from '@/components/SensorGuide';
 
 export default function MonitoringPage() {
     const { hasAccess, isDemoMode } = useAuth();
@@ -240,6 +241,8 @@ export default function MonitoringPage() {
                     </ResponsiveContainer>
                 </div>
             </div>
+
+            <SensorGuide mode="monitoring" />
         </div>
     );
 }

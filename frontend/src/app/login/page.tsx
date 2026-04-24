@@ -136,18 +136,18 @@ export default function LoginPage() {
                                 <User size={16} style={{ color: 'var(--accent-amber)' }} />
                                 <span>Login as <strong>Supervisor</strong></span>
                                 <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                    Orders • Users • Machines
+                                    Orders • Production • Machines
                                 </span>
                             </button>
                             <button
                                 className="btn btn-secondary"
-                                onClick={() => handleQuickLogin('it')}
+                                onClick={() => handleQuickLogin('admin')}
                                 style={{ width: '100%', justifyContent: 'flex-start' }}
                             >
-                                <Monitor size={16} style={{ color: 'var(--accent-emerald)' }} />
-                                <span>Login as <strong>IT Admin</strong></span>
+                                <Shield size={16} style={{ color: 'var(--accent-primary)' }} />
+                                <span>Login as <strong>Admin</strong></span>
                                 <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                    Full Access
+                                    Full Systems • Production
                                 </span>
                             </button>
                         </div>
@@ -163,8 +163,8 @@ export default function LoginPage() {
                     border: '1px solid rgba(59, 130, 246, 0.15)',
                 }}>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                        Demo accounts: <code style={{ color: 'var(--accent-cyan)' }}>engineer01</code> / <code style={{ color: 'var(--accent-amber)' }}>supervisor01</code> / <code style={{ color: 'var(--accent-emerald)' }}>it01</code>
-                        <br />Password: <code style={{ color: 'var(--text-secondary)' }}>demo1234</code>
+                        Demo accounts: <code style={{ color: 'var(--accent-cyan)' }}>engineer01</code> / <code style={{ color: 'var(--accent-amber)' }}>supervisor01</code> / <code style={{ color: 'var(--accent-primary)' }}>security_admin</code>
+                        <br />Password: <code style={{ color: 'var(--text-secondary)' }}>admin1234</code>
                     </p>
                 </div>
             </div>

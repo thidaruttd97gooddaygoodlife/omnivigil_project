@@ -238,7 +238,7 @@ def authorize(required_role: str, payload: dict = Depends(_current_token_payload
 # ==========================================
 
 def _require_admin_or_supervisor(payload: dict = Depends(_current_token_payload)) -> dict:
-    if payload["role"] not in ["it", "supervisor", "admin"]:
+    if payload["role"] not in ["supervisor", "admin"]:
         raise HTTPException(status_code=403, detail="Not authorized to manage users")
     return payload
 
@@ -263,10 +263,6 @@ def get_users(_=Depends(_require_admin_or_supervisor)) -> list[UserResponse]:
 
 @app.post("/users", response_model=UserResponse)
 def create_user(user: UserCreate, caller=Depends(_require_admin_or_supervisor)) -> UserResponse:
-    # Supervisors cannot create IT users
-    if caller["role"] == "supervisor" and user.role == "it":
-        raise HTTPException(status_code=403, detail="Supervisors cannot create IT users")
-
     hashed_password = pwd_context.hash(user.password)
     with _get_conn() as conn:
         with conn.cursor() as cursor:
@@ -292,8 +288,6 @@ def create_user(user: UserCreate, caller=Depends(_require_admin_or_supervisor)) 
 
 @app.put("/users/{username}", response_model=UserResponse)
 def update_user(username: str, updates: UserUpdate, caller=Depends(_require_admin_or_supervisor)) -> UserResponse:
-    if caller["role"] == "supervisor" and updates.role == "it":
-        raise HTTPException(status_code=403, detail="Supervisors cannot assign IT role")
 
     with _get_conn() as conn:
         with conn.cursor() as cursor:

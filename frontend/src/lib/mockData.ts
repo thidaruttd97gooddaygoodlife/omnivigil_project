@@ -2,7 +2,7 @@
 // OmniVigil — Mock Data Layer
 // ============================
 
-export type Role = 'engineer' | 'supervisor' | 'it' | 'admin';
+export type Role = 'engineer' | 'supervisor' | 'admin';
 
 export interface User {
   id: string;
@@ -111,21 +111,6 @@ export const mockUsers: User[] = [
     createdAt: '2025-10-15T08:00:00Z',
   },
   {
-    id: 'u3',
-    username: 'it01',
-    password: 'demo1234',
-    name: 'ธนกร ไอที',
-    role: 'it',
-    email: 'thanakorn@omnivigil.io',
-    createdAt: '2025-09-01T08:00:00Z',
-  },
-  {
-    id: 'u4',
-    username: 'engineer02',
-    password: 'demo1234',
-    name: 'วิชัย ช่างเทค',
-    role: 'engineer',
-    email: 'wichai@omnivigil.io',
     createdAt: '2025-12-01T08:00:00Z',
   },
   {
@@ -136,6 +121,15 @@ export const mockUsers: User[] = [
     role: 'supervisor',
     email: 'napa@omnivigil.io',
     createdAt: '2026-01-10T08:00:00Z',
+  },
+  {
+    id: 'u6',
+    username: 'admin01',
+    password: 'demo1234',
+    name: 'แอดมิน ระบบ',
+    role: 'admin',
+    email: 'admin@omnivigil.io',
+    createdAt: '2025-01-01T08:00:00Z',
   },
 ];
 
@@ -695,9 +689,8 @@ export function generateHealthHistory(machineId: string): { date: string; score:
 // ---- Role Access Control ----
 export const rolePermissions: Record<Role, string[]> = {
   engineer: ['health', 'anomaly', 'workorders'],
-  supervisor: ['monitoring', 'workorders', 'users', 'machines'],
-  it: ['monitoring', 'health', 'anomaly', 'workorders', 'users', 'machines', 'system'],
-  admin: ['monitoring', 'health', 'anomaly', 'workorders', 'users', 'machines', 'system'],
+  supervisor: ['monitoring', 'workorders', 'users', 'machines', 'production'],
+  admin: ['monitoring', 'health', 'anomaly', 'workorders', 'users', 'machines', 'system', 'production'],
 };
 
 export function hasPageAccess(role: Role, page: string): boolean {
@@ -708,7 +701,6 @@ export function getDefaultPage(role: Role): string {
   switch (role) {
     case 'engineer': return '/dashboard/health';
     case 'supervisor': return '/dashboard/monitoring';
-    case 'it': 
     case 'admin': return '/dashboard/monitoring';
     default: return '/login';
   }

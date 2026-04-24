@@ -4,6 +4,7 @@ import axios from 'axios';
 const MS1_AUTH = 'http://localhost:8001';
 const MS2_INGESTOR = 'http://localhost:8002';
 const MS3_AI = 'http://localhost:8003';
+const MS4_ALERT = 'http://localhost:8004';
 const MS5_MAINTENANCE = 'http://localhost:8005';
 const MS6_MACHINE = 'http://localhost:8006';
 
@@ -39,6 +40,12 @@ export const aiApi = axios.create({
 });
 aiApi.interceptors.request.use(attachToken);
 
+// Alert API Client
+export const alertApi = axios.create({
+  baseURL: MS4_ALERT,
+});
+alertApi.interceptors.request.use(attachToken);
+
 // Maintenance API Client
 export const maintenanceApi = axios.create({
   baseURL: MS5_MAINTENANCE,
@@ -51,4 +58,4 @@ export const machineApi = axios.create({
 });
 machineApi.interceptors.request.use(attachToken);
 
-export { MS1_AUTH, MS2_INGESTOR, MS3_AI, MS5_MAINTENANCE, MS6_MACHINE };
+export { MS1_AUTH, MS2_INGESTOR, MS3_AI, MS4_ALERT, MS5_MAINTENANCE, MS6_MACHINE };
