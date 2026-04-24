@@ -17,25 +17,24 @@ export default function UsersPage() {
         return <div className="no-access"><h2>🔒 Access Denied</h2><p>You do not have permission to view this page.</p></div>;
     }
 
-    const isIT = currentUser?.role === 'it' || currentUser?.role === 'admin';
+    const isAdmin = currentUser?.role === 'admin';
     const isSupervisor = currentUser?.role === 'supervisor';
 
     // Supervisor/Admin can manage users
-    const canManageUsers = isIT || isSupervisor;
+    const canManageUsers = isAdmin || isSupervisor;
 
-    // Filter users based on role (Supervisor should NOT see Admin/IT)
+    // Filter users based on role (Supervisor should NOT see Admin)
     const visibleUsers = allUsers.filter(u => {
-        if (isIT) return true;
-        if (isSupervisor) return u.role !== 'admin' && u.role !== 'it';
+        if (isAdmin) return true;
+        if (isSupervisor) return u.role !== 'admin';
         return false;
     });
 
-    // Supervisor cannot assign Admin/IT role
+    // Supervisor cannot assign Admin role
     const availableRoles: { value: Role; label: string }[] = [
         { value: 'engineer' as Role, label: 'Engineer' },
         { value: 'supervisor', label: 'Supervisor' },
-        ...(isIT ? [
-            { value: 'it' as Role, label: 'IT User' },
+        ...(isAdmin ? [
             { value: 'admin' as Role, label: 'System Admin' }
         ] : []),
     ];
@@ -43,13 +42,13 @@ export default function UsersPage() {
     const roleColors: Record<Role, string> = {
         engineer: 'var(--accent-cyan)',
         supervisor: 'var(--accent-amber)',
-        it: 'var(--accent-emerald)',
         admin: 'var(--accent-primary)',
     };
 
     const roleCounts = {
-        engineer: visibleUsers.filter(u => u.role === 'engineer').length,
+        admin: visibleUsers.filter(u => u.role === 'admin').length,
         supervisor: visibleUsers.filter(u => u.role === 'supervisor').length,
+        engineer: visibleUsers.filter(u => u.role === 'engineer').length,
     };
 
     const openCreate = () => {
@@ -89,7 +88,7 @@ export default function UsersPage() {
     const handleDelete = (id: string) => {
         const target = allUsers.find(u => u.id === id);
         if (target?.id === currentUser?.id) return;
-        if (isSupervisor && target?.role === 'it') return;
+        if (isSupervisor && target?.role === 'admin') return;
         
         setTargetDeleteId(id);
         setShowDeleteModal(true);
@@ -123,8 +122,8 @@ export default function UsersPage() {
                 </div>
                 {Object.entries(roleCounts).map(([role, count]) => (
                     <div key={role} className="stat-card glass-card">
-                        <div className="stat-label">{role === 'it' ? 'IT Admin' : role.charAt(0).toUpperCase() + role.slice(1)}</div>
-                        <div className="stat-value" style={{ color: roleColors[role as Role] }}>{count}</div>
+                        <div className="stat-label">{role === 'admin' ? 'System Admin' : (role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Unknown')}</div>
+                        <div className="stat-value" style={{ color: roleColors[role as Role] || 'var(--text-muted)' }}>{count}</div>
                     </div>
                 ))}
             </div>
@@ -144,7 +143,7 @@ export default function UsersPage() {
                     gap: '8px',
                 }}>
                     <Shield size={16} />
-                    As Supervisor, you can create Engineer and Supervisor accounts. IT Admin role requires IT permissions.
+                    As Supervisor, you can create Engineer and Supervisor accounts. System Admin role requires Admin permissions.
                 </div>
             )}
 
@@ -170,18 +169,18 @@ export default function UsersPage() {
                                             width: '32px',
                                             height: '32px',
                                             borderRadius: '8px',
-                                            background: `${roleColors[u.role]}20`,
-                                            border: `1px solid ${roleColors[u.role]}40`,
+                                            background: `${roleColors[u.role] || '#888'}20`,
+                                            border: `1px solid ${roleColors[u.role] || '#888'}40`,
                                             display: 'flex',
                                             alignItems: 'center',
                                             justifyContent: 'center',
                                             fontSize: '0.8rem',
                                             fontWeight: 700,
-                                            color: roleColors[u.role],
+                                            color: roleColors[u.role] || '#888',
                                         }}>
-                                            {u.name.charAt(0)}
+                                            {u.name ? u.name.charAt(0) : '?'}
                                         </div>
-                                        {u.name}
+                                        {u.name || 'Unknown User'}
                                         {u.id === currentUser?.id && (
                                             <span style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', fontWeight: 600 }}>(You)</span>
                                         )}
@@ -196,21 +195,21 @@ export default function UsersPage() {
                                         gap: '6px',
                                         padding: '4px 12px',
                                         borderRadius: '20px',
-                                        background: `${roleColors[u.role]}15`,
-                                        color: roleColors[u.role],
+                                        background: `${roleColors[u.role] || '#888'}15`,
+                                        color: roleColors[u.role] || '#888',
                                         fontSize: '0.78rem',
                                         fontWeight: 600,
-                                        border: `1px solid ${roleColors[u.role]}30`,
+                                        border: `1px solid ${roleColors[u.role] || '#888'}30`,
                                     }}>
                                         <Shield size={12} />
-                                        {u.role === 'it' ? 'IT Admin' : u.role.charAt(0).toUpperCase() + u.role.slice(1)}
+                                        {u.role === 'admin' ? 'System Admin' : (u.role ? u.role.charAt(0).toUpperCase() + u.role.slice(1) : 'User')}
                                     </span>
                                 </td>
                                 <td style={{ fontSize: '0.8rem' }}>
-                                    {new Date(u.createdAt).toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' })}
+                                    {u.createdAt ? new Date(u.createdAt).toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'}
                                 </td>
                                 <td>
-                                    {u.id !== currentUser?.id && !(isSupervisor && (u.role === 'it' || u.role === 'admin')) ? (
+                                    {u.id !== currentUser?.id && !(isSupervisor && u.role === 'admin') ? (
                                         <div style={{ display: 'flex', gap: '8px' }}>
                                             <button className="btn btn-secondary btn-sm" onClick={() => openEdit(u)}>
                                                 Edit
@@ -259,7 +258,7 @@ export default function UsersPage() {
                             </select>
                             {isSupervisor && (
                                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                                    IT Admin role is not available for Supervisor
+                                    System Admin role is not available for Supervisor
                                 </p>
                             )}
                         </div>

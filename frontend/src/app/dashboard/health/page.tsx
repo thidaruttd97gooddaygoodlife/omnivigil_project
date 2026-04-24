@@ -6,6 +6,7 @@ import { ingestorApi, machineApi } from '@/lib/api';
 import { generateHealthHistory, Machine } from '@/lib/mockData';
 import { Heart, TrendingUp, TrendingDown, Shield } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Cell } from 'recharts';
+import { SensorGuide } from '@/components/SensorGuide';
 
 export default function HealthPage() {
     const { hasAccess, isDemoMode } = useAuth();
@@ -179,6 +180,8 @@ export default function HealthPage() {
                     );
                 })}
             </div>
+
+            <SensorGuide mode="health" />
         </div>
     );
 }

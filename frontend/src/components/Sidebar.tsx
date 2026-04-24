@@ -7,7 +7,7 @@ import { hasPageAccess, Role } from '@/lib/mockData';
 import {
     Activity, Heart, Brain, Bell, ClipboardList,
     Users, Server, Settings, LogOut, Eye, ChevronLeft,
-    ChevronRight, Cpu
+    ChevronRight, Cpu, Box
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -25,13 +25,13 @@ const allNavItems: NavItem[] = [
     { id: 'workorders', label: 'Work Orders', href: '/dashboard/workorders', icon: <ClipboardList size={20} /> },
     { id: 'users', label: 'User Management', href: '/dashboard/users', icon: <Users size={20} /> },
     { id: 'machines', label: 'Machine Registry', href: '/dashboard/machines', icon: <Cpu size={20} /> },
+    { id: 'production', label: 'Production Performance', href: '/dashboard/production', icon: <Box size={20} /> },
     { id: 'system', label: 'System Health', href: '/dashboard/system', icon: <Server size={20} /> },
 ];
 
 const roleLabels: Record<Role, { label: string; color: string }> = {
     engineer: { label: 'Engineer', color: 'var(--accent-cyan)' },
     supervisor: { label: 'Supervisor', color: 'var(--accent-amber)' },
-    it: { label: 'IT Admin', color: 'var(--accent-emerald)' },
     admin: { label: 'System Admin', color: 'var(--accent-primary)' },
 };
 

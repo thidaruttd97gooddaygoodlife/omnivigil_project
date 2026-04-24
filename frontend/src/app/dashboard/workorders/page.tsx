@@ -36,17 +36,21 @@ export default function WorkOrdersPage() {
 
         try {
             const res = await maintenanceApi.get('/work-orders');
-            // Use the machines loaded from API if possible (though we map below)
             const apiOrders: WorkOrder[] = res.data.items.map((item: any) => {
-                // Ensure machines are loaded first or use mapping effectively
+                // Map DB status to Frontend status
+                let mappedStatus: WorkOrder['status'] = 'open';
+                if (item.status === 'acknowledged' || item.status === 'completed') mappedStatus = 'completed';
+                else if (item.status === 'in_progress') mappedStatus = 'in_progress';
+                else if (item.status === 'cancelled') mappedStatus = 'cancelled';
+                
                 return {
                     id: item.work_order_id,
                     machineId: item.machine_id || 'unknown',
-                    machineName: 'Resolving...', // Will be resolved in the map below or in render
+                    machineName: 'Resolving...',
                     title: item.issue || 'No Title',
                     description: item.issue,
                     priority: item.priority || 'medium',
-                    status: item.status === 'acknowledged' ? 'completed' : 'open',
+                    status: mappedStatus,
                     assignedTo: 'Unassigned',
                     createdAt: item.created_at,
                     updatedAt: item.acknowledged_at || item.created_at,
@@ -64,14 +68,16 @@ export default function WorkOrdersPage() {
         loadOrders(); 
     }, [isDemoMode]);
 
+    const [showConfirm, setShowConfirm] = useState<{ id: string, status: string } | null>(null);
+
     const isEngineer = user?.role === 'engineer';
     const isSupervisor = user?.role === 'supervisor';
-    const isAdminOrIT = user?.role === 'admin' || user?.role === 'it';
+    const isAdmin = user?.role === 'admin';
     
-    const canCreate = isEngineer || isAdminOrIT;
-    const canEditStatus = isSupervisor || isAdminOrIT;
+    const canCreate = isEngineer || isAdmin;
+    const canEditStatus = isSupervisor || isAdmin;
 
-    if (!hasAccess('workorders')) {
+    if (!hasAccess('workorders') && user?.role !== 'admin') {
         return <div className="no-access"><h2>🔒 Access Denied</h2><p>You do not have permission to view this page.</p></div>;
     }
 
@@ -106,15 +112,31 @@ export default function WorkOrdersPage() {
         }
     };
 
-    const handleStatusChange = async (orderId: string, newStatus: string) => {
-        if (newStatus === 'completed') {
-            try {
-                await maintenanceApi.patch(`/work-orders/${orderId}/ack`);
+    const executeStatusChange = async () => {
+        if (!showConfirm) return;
+        const { id: orderId, status: newStatus } = showConfirm;
+
+        try {
+            if (isDemoMode) {
+                // In demo mode, update local state
+                setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus as WorkOrder['status'] } : o));
+            } else {
+                if (newStatus === 'completed') {
+                    await maintenanceApi.patch(`/work-orders/${orderId}/ack`);
+                } else {
+                    await maintenanceApi.patch(`/work-orders/${orderId}/status`, { status: newStatus });
+                }
                 await loadOrders();
-            } catch (err) { console.error(err); }
-        } else {
-            setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus as WorkOrder['status'] } : o));
+            }
+        } catch (err) { 
+            console.error('Failed to update status', err); 
+        } finally {
+            setShowConfirm(null);
         }
+    };
+
+    const handleStatusChange = (orderId: string, newStatus: string) => {
+        setShowConfirm({ id: orderId, status: newStatus });
     };
 
     return (
@@ -260,6 +282,37 @@ export default function WorkOrdersPage() {
                             <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
                             <button className="btn btn-primary" onClick={handleCreate} disabled={!form.machineId || !form.title}>
                                 <Plus size={16} /> Create
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Confirm Status Change Modal */}
+            {showConfirm && (
+                <div className="modal-overlay" onClick={() => setShowConfirm(null)}>
+                    <div className="modal-content" style={{ maxWidth: '400px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ 
+                            width: '60px', 
+                            height: '60px', 
+                            borderRadius: '50%', 
+                            background: 'rgba(59, 130, 246, 0.1)', 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'center',
+                            margin: '0 auto 20px',
+                            color: 'var(--accent-primary)'
+                        }}>
+                            <ClipboardList size={30} />
+                        </div>
+                        <h2 style={{ marginBottom: '10px' }}>Confirm Status Change</h2>
+                        <p style={{ color: 'var(--text-secondary)', marginBottom: '30px' }}>
+                            Are you sure you want to change the status of this work order to <strong>"{showConfirm.status.replace('_', ' ')}"</strong>?
+                        </p>
+                        <div className="form-actions" style={{ justifyContent: 'center', gap: '12px' }}>
+                            <button className="btn btn-secondary" onClick={() => setShowConfirm(null)}>Cancel</button>
+                            <button className="btn btn-primary" onClick={executeStatusChange}>
+                                Confirm Change
                             </button>
                         </div>
                     </div>

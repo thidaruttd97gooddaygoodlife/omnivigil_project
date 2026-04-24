@@ -193,3 +193,39 @@ def ack_work_order(work_order_id: str) -> dict:
     except Exception as e:
         logger.error(f"Failed to acknowledge work order: {e}")
         raise HTTPException(status_code=500, detail="Database error")
+
+class StatusUpdateRequest(BaseModel):
+    status: str
+
+@app.patch("/work-orders/{work_order_id}/status")
+def update_work_order_status(work_order_id: str, request: StatusUpdateRequest) -> dict:
+    """Generic endpoint to update work order status."""
+    try:
+        with pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    UPDATE work_orders 
+                    SET status = %s 
+                    WHERE work_order_id = %s 
+                    RETURNING *
+                    """,
+                    (request.status, work_order_id)
+                )
+                item = cursor.fetchone()
+                if not item:
+                    raise HTTPException(status_code=404, detail="Work order not found")
+                
+                conn.commit()
+                
+                item['work_order_id'] = str(item['work_order_id'])
+                item['created_at'] = item['created_at'].isoformat()
+                if item['acknowledged_at']:
+                    item['acknowledged_at'] = item['acknowledged_at'].isoformat()
+                
+                return item
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update status: {e}")
+        raise HTTPException(status_code=500, detail="Database error")
