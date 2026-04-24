@@ -1,14 +1,28 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
-from uuid import uuid4
+from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-app = FastAPI(title="MS5 Maintenance", version="0.1.0")
+from app.database import Base, engine, get_db
+from app.models import WorkOrder
+from app.schemas import WorkOrderCreate, WorkOrderResponse, CompleteRequest
+
+app = FastAPI(title="MS5 Maintenance System", version="0.1.0")
+
+
+# สร้าง table ทุกตารางใน DB ตอน startup (ถ้ายังไม่มี)
+@app.on_event("startup")
+def create_tables_on_startup() -> None:
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        # Let FastAPI startup fail explicitly instead of crashing during import.
+        raise
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,69 +33,91 @@ app.add_middleware(
 )
 
 
-class WorkOrderRequest(BaseModel):
-    machine_id: str
-    issue: str
-    priority: str = "medium"
-    source_alert_id: Optional[str] = None
-
-
-class WorkOrderResponse(BaseModel):
-    work_order_id: str
-    status: str
-    created_at: str
-
-
-_work_orders: List[dict] = []
-
-
 @app.get("/health")
-def health() -> dict:
+def health():
     return {"status": "ok", "service": "ms5-maintenance"}
 
 
+# MS3 เรียก endpoint นี้เมื่อตรวจพบ anomaly
 @app.post("/work-orders", response_model=WorkOrderResponse)
-def create_work_order(request: WorkOrderRequest) -> WorkOrderResponse:
-    work_order_id = str(uuid4())
-    created_at = datetime.now(timezone.utc).isoformat()
-
-    payload = {
-        "work_order_id": work_order_id,
-        "machine_id": request.machine_id,
-        "issue": request.issue,
-        "priority": request.priority,
-        "source_alert_id": request.source_alert_id,
-        "status": "open",
-        "created_at": created_at,
-        "acknowledged_at": None,
-    }
-    _work_orders.append(payload)
-
+def create_work_order(payload: WorkOrderCreate, db: Session = Depends(get_db)):
+    order = WorkOrder(
+        machine_id=payload.machine_id,
+        issue=payload.issue,
+        priority=payload.priority,
+        source_alert_id=payload.source_alert_id,
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    # MS3 ต้องการ field ชื่อ work_order_id เพื่อเก็บไว้ใน response
     return WorkOrderResponse(
-        work_order_id=work_order_id,
-        status="open",
-        created_at=created_at,
+        work_order_id=order.id,
+        machine_id=order.machine_id,
+        issue=order.issue,
+        priority=order.priority,
+        status=order.status,
+        created_at=order.created_at,
     )
 
 
 @app.get("/work-orders")
-def list_work_orders(limit: int = 50) -> dict:
-    return {"items": _work_orders[-limit:]}
+def list_work_orders(
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db)
+):
+    query = db.query(WorkOrder)
+    if status:
+        query = query.filter(WorkOrder.status == status)
+    orders = (
+        query
+        .order_by(WorkOrder.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {"items": [
+        {
+            "work_order_id": o.id,
+            "machine_id": o.machine_id,
+            "issue": o.issue,
+            "priority": o.priority,
+            "status": o.status,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        }
+        for o in orders
+    ]}
 
 
-@app.get("/work-orders/{work_order_id}")
-def get_work_order(work_order_id: str) -> dict:
-    for item in _work_orders:
-        if item["work_order_id"] == work_order_id:
-            return item
-    return {"error": "not_found"}
+@app.patch("/work-orders/{order_id}/accept")
+def accept_work_order(order_id: int, db: Session = Depends(get_db)):
+    order = db.query(WorkOrder).filter(WorkOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    if order.status != "open":
+        raise HTTPException(status_code=400, detail=f"Cannot accept order with status '{order.status}'")
+    order.status = "in_progress"
+    order.accepted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"message": "Work order accepted", "work_order_id": order_id, "status": "in_progress"}
 
 
-@app.patch("/work-orders/{work_order_id}/ack")
-def ack_work_order(work_order_id: str) -> dict:
-    for item in _work_orders:
-        if item["work_order_id"] == work_order_id:
-            item["status"] = "acknowledged"
-            item["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
-            return item
-    return {"error": "not_found"}
+@app.patch("/work-orders/{order_id}/complete")
+def complete_work_order(
+    order_id: int,
+    payload: CompleteRequest,
+    db: Session = Depends(get_db)
+):
+    order = db.query(WorkOrder).filter(WorkOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    if order.status not in {"open", "in_progress"}:
+        raise HTTPException(status_code=400, detail=f"Cannot complete order with status '{order.status}'")
+    order.status = "completed"
+    order.action_taken = payload.action_taken
+    order.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"message": "Work order completed", "work_order_id": order_id, "status": "completed"}
+
