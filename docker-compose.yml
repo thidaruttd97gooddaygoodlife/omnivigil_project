@@ -152,7 +152,7 @@ services:
     ports:
       - "8003:8003"
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379
       ALERT_URL: http://ms4-alert:8004
       MAINTENANCE_URL: http://ms5-maintenance:8005
     healthcheck:
@@ -161,23 +161,8 @@ services:
       timeout: 4s
       retries: 10
       start_period: 15s
-    mem_limit: 512m
+    mem_limit: 384m
     cpus: 0.5
-    depends_on:
-      redis:
-        condition: service_healthy
-
-  ms3-worker:
-    build:
-      context: ./services/ms3-ai-engine
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
-    restart: unless-stopped
-    environment:
-      REDIS_URL: redis://redis:6379/0
-      ALERT_URL: http://ms4-alert:8004
-      MAINTENANCE_URL: http://ms5-maintenance:8005
-    mem_limit: 2048m
-    cpus: 1.0
     depends_on:
       redis:
         condition: service_healthy
@@ -225,6 +210,9 @@ services:
   ms1-auth:
     build:
       context: ./services/ms1-auth
+    volumes:
+      - ./services/ms1-auth/app:/app/app
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     ports:
       - "8001:8001"
@@ -260,11 +248,27 @@ services:
       NETWORK_DROP_RATE: 0.03
       NETWORK_DROP_DURATION_SEC: 8
       MANUAL_TRIGGER_FILE: /tmp/force_anomaly
+      MS6_API_URL: http://ms6-machine:8006
     mem_limit: 256m
     cpus: 0.5
     depends_on:
       mosquitto:
         condition: service_healthy
+
+  ms6-machine:
+    build:
+      context: ./services/ms6-machine
+    restart: unless-stopped
+    ports:
+      - "8006:8006"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    mem_limit: 256m
+    cpus: 0.5
 
 volumes:
   influxdb_data:

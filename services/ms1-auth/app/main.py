@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import os
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
 import psycopg
+import docker
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from psycopg.rows import dict_row
+
+# Setup Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ms1-auth")
 
 app = FastAPI(title="MS1 Auth Service", version="0.1.0")
 
@@ -52,9 +58,35 @@ class VerifyResponse(BaseModel):
     exp: int
 
 
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class UserUpdate(BaseModel):
+    password: Optional[str] = None
+    role: Optional[str] = None
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+    full_name: Optional[str]
+    email: Optional[str]
+    created_at: str
+
+
 class UserProfile(BaseModel):
     username: str
     role: str
+    full_name: Optional[str]
+    email: Optional[str]
 
 
 def _get_conn() -> psycopg.Connection:
@@ -89,21 +121,23 @@ def _verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def _seed_users() -> None:
     default_users = [
-        ("security_admin", "admin", "admin1234"),
-        ("technician_a", "technician", "tech1234"),
-        ("viewer_a", "viewer", "view1234"),
+        ("security_admin", "admin", "admin1234", "System Administrator", "admin@omnivigil.io"),
     ]
     with _get_conn() as conn:
         with conn.cursor() as cursor:
-            for username, role, password in default_users:
+            # Clean up obsolete roles/users
+            cursor.execute("DELETE FROM users WHERE username IN ('technician_a', 'viewer_a')")
+            
+            for username, role, password, name, email in default_users:
                 hashed_password = pwd_context.hash(password)
                 cursor.execute(
                     """
-                    INSERT INTO users (username, password_hash, role)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (username) DO NOTHING
+                    INSERT INTO users (username, password_hash, role, full_name, email)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (username) DO UPDATE 
+                    SET full_name = EXCLUDED.full_name, email = EXCLUDED.email
                     """,
-                    (username, hashed_password, role),
+                    (username, hashed_password, role, name, email),
                 )
         conn.commit()
 
@@ -118,10 +152,15 @@ def _init_db() -> None:
                     username VARCHAR(80) UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     role VARCHAR(40) NOT NULL,
+                    full_name VARCHAR(255),
+                    email VARCHAR(255),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
             )
+            # Ensure columns exist if table was already created
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255)")
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
         conn.commit()
     _seed_users()
 
@@ -130,7 +169,7 @@ def _get_user_by_username(username: str) -> Optional[dict]:
     with _get_conn() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT username, password_hash, role FROM users WHERE username = %s",
+                "SELECT username, password_hash, role, full_name, email FROM users WHERE username = %s",
                 (username,),
             )
             return cursor.fetchone()
@@ -178,7 +217,15 @@ def verify(payload: dict = Depends(_current_token_payload)) -> VerifyResponse:
 
 @app.get("/auth/me", response_model=UserProfile)
 def me(payload: dict = Depends(_current_token_payload)) -> UserProfile:
-    return UserProfile(username=payload["sub"], role=payload["role"])
+    user = _get_user_by_username(payload["sub"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserProfile(
+        username=user["username"], 
+        role=user["role"],
+        full_name=user.get("full_name"),
+        email=user.get("email")
+    )
 
 
 @app.get("/auth/authorize")
@@ -190,3 +237,146 @@ def authorize(required_role: str, payload: dict = Depends(_current_token_payload
         "required_role": required_role,
         "current_role": role,
     }
+
+
+# ==========================================
+# User Management CRUD API
+# ==========================================
+
+def _require_admin_or_supervisor(payload: dict = Depends(_current_token_payload)) -> dict:
+    if payload["role"] not in ["supervisor", "admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized to manage users")
+    return payload
+
+
+@app.get("/users", response_model=list[UserResponse])
+def get_users(_=Depends(_require_admin_or_supervisor)) -> list[UserResponse]:
+    with _get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id, username, role, full_name, email, created_at FROM users ORDER BY id ASC")
+            users = cursor.fetchall()
+            return [
+                UserResponse(
+                    id=u["id"],
+                    username=u["username"],
+                    role=u["role"],
+                    full_name=u.get("full_name"),
+                    email=u.get("email"),
+                    created_at=u["created_at"].isoformat() if isinstance(u["created_at"], datetime) else str(u["created_at"])
+                ) for u in users
+            ]
+
+
+@app.post("/users", response_model=UserResponse)
+def create_user(user: UserCreate, caller=Depends(_require_admin_or_supervisor)) -> UserResponse:
+    hashed_password = pwd_context.hash(user.password)
+    with _get_conn() as conn:
+        with conn.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "INSERT INTO users (username, password_hash, role, full_name, email) VALUES (%s, %s, %s, %s, %s) RETURNING id, created_at",
+                    (user.username, hashed_password, user.role, user.full_name, user.email),
+                )
+                res = cursor.fetchone()
+                conn.commit()
+                return UserResponse(
+                    id=res["id"],
+                    username=user.username,
+                    role=user.role,
+                    full_name=user.full_name,
+                    email=user.email,
+                    created_at=res["created_at"].isoformat() if isinstance(res["created_at"], datetime) else str(res["created_at"])
+                )
+            except psycopg.errors.UniqueViolation:
+                conn.rollback()
+                raise HTTPException(status_code=400, detail="Username already exists")
+
+
+@app.put("/users/{username}", response_model=UserResponse)
+def update_user(username: str, updates: UserUpdate, caller=Depends(_require_admin_or_supervisor)) -> UserResponse:
+
+    with _get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+            existing = cursor.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            # Update fields
+            new_role = updates.role if updates.role else existing["role"]
+            new_hash = pwd_context.hash(updates.password) if updates.password else existing["password_hash"]
+            new_name = updates.full_name if updates.full_name is not None else existing["full_name"]
+            new_email = updates.email if updates.email is not None else existing["email"]
+
+            cursor.execute(
+                "UPDATE users SET role = %s, password_hash = %s, full_name = %s, email = %s WHERE username = %s RETURNING id, created_at",
+                (new_role, new_hash, new_name, new_email, username)
+            )
+            res = cursor.fetchone()
+            conn.commit()
+
+            return UserResponse(
+                id=res["id"],
+                username=username,
+                role=new_role,
+                full_name=new_name,
+                email=new_email,
+                created_at=res["created_at"].isoformat() if isinstance(res["created_at"], datetime) else str(res["created_at"])
+            )
+
+
+@app.delete("/users/{username}")
+def delete_user(username: str, caller=Depends(_require_admin_or_supervisor)) -> dict:
+    if username == "admin":
+        raise HTTPException(status_code=400, detail="Cannot delete admin user")
+
+    with _get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM users WHERE username = %s RETURNING id", (username,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="User not found")
+        conn.commit()
+    return {"status": "deleted", "username": username}
+
+@app.get("/docker/stats")
+def get_docker_stats():
+    """Fetch real-time CPU and Memory stats from Docker Socket."""
+    try:
+        client = docker.from_env()
+        containers = client.containers.list()
+        stats_data = []
+
+        for container in containers:
+            try:
+                stats = container.stats(stream=False)
+                cpu_stats = stats.get("cpu_stats", {})
+                precpu_stats = stats.get("precpu_stats", {})
+                
+                cpu_delta = cpu_stats.get("cpu_usage", {}).get("total_usage", 0) - \
+                           precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+                system_delta = cpu_stats.get("system_cpu_usage", 0) - \
+                              precpu_stats.get("system_cpu_usage", 0)
+                
+                number_cpus = cpu_stats.get("online_cpus", 1)
+                cpu_percent = 0.0
+                if system_delta > 0 and cpu_delta > 0:
+                    cpu_percent = (cpu_delta / system_delta) * number_cpus * 100.0
+
+                mem_usage = stats.get("memory_stats", {}).get("usage", 0)
+                mem_limit = stats.get("memory_stats", {}).get("limit", 1)
+                mem_percent = (mem_usage / mem_limit) * 100.0
+
+                stats_data.append({
+                    "name": container.name,
+                    "id": container.short_id,
+                    "status": container.status,
+                    "cpu_percent": round(cpu_percent, 2),
+                    "mem_percent": round(mem_percent, 2),
+                    "mem_usage_mb": round(mem_usage / (1024 * 1024), 2)
+                })
+            except Exception:
+                continue
+
+        return stats_data
+    except Exception as e:
+        return {"error": str(e)}

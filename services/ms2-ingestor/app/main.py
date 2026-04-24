@@ -14,7 +14,7 @@ import paho.mqtt.client as mqtt
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient, Point, WritePrecision
-from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client.client.write_api import SYNCHRONOUS, WriteOptions
 from pydantic import BaseModel, Field, ValidationError
 
 from app.sensor_standards import evaluate_sensor_value, standards_as_dict
@@ -79,6 +79,15 @@ class QualityRecord(BaseModel):
     critical_count: int
     jump_count: int
     status_by_sensor: dict[str, str]
+
+
+class HistoryRecord(BaseModel):
+    timestamp: datetime
+    temperature_c: float
+    vibration_rms: float
+    rpm: Optional[float] = None
+    pressure_bar: Optional[float] = None
+    quality_score: float
 
 
 _ai_engine_url = os.getenv("AI_ENGINE_URL", "").strip()
@@ -204,8 +213,14 @@ def _init_influx() -> None:
         return
 
     _influx_client = InfluxDBClient(url=_influx_url, token=_influx_token, org=_influx_org)
-    _write_api = _influx_client.write_api(write_options=SYNCHRONOUS)
-    logger.info("InfluxDB writer initialized bucket=%s org=%s", _influx_bucket, _influx_org)
+    _write_api = _influx_client.write_api(write_options=WriteOptions(
+        batch_size=500,
+        flush_interval=10_000,  # 10s
+        jitter_interval=2_000,
+        retry_interval=5_000,
+        max_retries=5,
+    ))
+    logger.info("InfluxDB writer initialized (Batch Mode) bucket=%s org=%s", _influx_bucket, _influx_org)
 
 
 def _write_influx(reading: TelemetryReading, quality: Optional[QualityRecord] = None) -> bool:
@@ -271,18 +286,16 @@ def _store_reading(cleaned: TelemetryReading) -> None:
         _stats["last_ingest_at"] = cleaned.timestamp.isoformat()
         _stats["last_device_id"] = cleaned.device_id
 
-    _flush_pending_writes(max_items=100)
+    # In batch mode, we just write. Let the client handle queueing/batching.
     try:
         if _write_influx(cleaned, quality=quality):
             with _state_lock:
                 _stats["influx_write_success_total"] = int(_stats["influx_write_success_total"]) + 1
     except Exception as exc:
         with _state_lock:
-            if len(_pending_writes) < _pending_writes.maxlen:
-                _pending_writes.append(cleaned)
             _stats["influx_write_error_total"] = int(_stats["influx_write_error_total"]) + 1
             _stats["last_error"] = f"Influx write failed: {exc}"
-        logger.warning("InfluxDB write failed. buffered=%s error=%s", len(_pending_writes), exc)
+        logger.warning("InfluxDB write trigger failed: %s", exc)
 
 
 def _flush_pending_writes(max_items: int = 200) -> None:
@@ -448,19 +461,17 @@ def ingest(reading: TelemetryReading) -> IngestResponse:
 
 
 @app.post("/ingest/analyze", response_model=IngestAnalyzeResponse)
-def ingest_analyze(reading: List[TelemetryReading]) -> IngestAnalyzeResponse:
-    logger.info(f"Received batch ingest with {len(reading)} readings")
-    cleaned = [_clean_reading(item) for item in reading]
-    for item in cleaned:
-        _store_reading(item)
-    analysis, error = _call_ai_engine(cleaned)
+def ingest_analyze(reading: TelemetryReading) -> IngestAnalyzeResponse:
+    cleaned = _clean_reading(reading)
+    _store_reading(cleaned)
+    analysis, error = _call_ai_engine([cleaned])
     with _state_lock:
         stored_count = len(_readings)
 
     return IngestAnalyzeResponse(
         ingest=IngestResponse(
             accepted=True,
-            cleaned=cleaned[-1],  # Return the last reading as representative
+            cleaned=cleaned,
             stored_count=stored_count,
             ingest_id=str(uuid4()),
         ),
@@ -524,3 +535,52 @@ def readings(limit: int = 100) -> List[TelemetryReading]:
     with _state_lock:
         data = list(_readings)[-limit:]
     return data
+
+
+@app.get("/history/{device_id}", response_model=List[HistoryRecord])
+def get_history(device_id: str, days: int = 7) -> List[HistoryRecord]:
+    if not _influx_client:
+        # Fallback to in-memory if Influx is disabled
+        results = []
+        with _state_lock:
+            for i, r in enumerate(_readings):
+                if r.device_id == device_id:
+                    q = _quality_records[i] if i < len(_quality_records) else None
+                    results.append(HistoryRecord(
+                        timestamp=r.timestamp,
+                        temperature_c=r.temperature_c,
+                        vibration_rms=r.vibration_rms,
+                        rpm=r.rpm,
+                        pressure_bar=r.pressure_bar,
+                        quality_score=q.quality_score if q else 100.0
+                    ))
+        return results[-100:]
+
+    query_api = _influx_client.query_api()
+    query = f'''
+    from(bucket: "{_influx_bucket}")
+      |> range(start: -{days}d)
+      |> filter(fn: (r) => r["_measurement"] == "telemetry")
+      |> filter(fn: (r) => r["device_id"] == "{device_id}")
+      |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+      |> keep(columns: ["_time", "temperature_c", "vibration_rms", "rpm", "pressure_bar", "quality_score"])
+      |> sort(columns: ["_time"])
+    '''
+    
+    try:
+        tables = query_api.query(query, org=_influx_org)
+        records = []
+        for table in tables:
+            for record in table.records:
+                records.append(HistoryRecord(
+                    timestamp=record.get_time(),
+                    temperature_c=record.values.get("temperature_c", 0.0),
+                    vibration_rms=record.values.get("vibration_rms", 0.0),
+                    rpm=record.values.get("rpm"),
+                    pressure_bar=record.values.get("pressure_bar"),
+                    quality_score=record.values.get("quality_score", 100.0)
+                ))
+        return records
+    except Exception as exc:
+        logger.error(f"InfluxDB history query failed: {exc}")
+        return []

@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import requests
 
 import paho.mqtt.client as mqtt
 
@@ -29,6 +30,7 @@ NETWORK_DROP_DURATION_SEC = float(os.getenv("NETWORK_DROP_DURATION_SEC", "8"))
 
 MANUAL_TRIGGER_FILE = os.getenv("MANUAL_TRIGGER_FILE", "/tmp/force_anomaly")
 LOG_EVERY_N_MESSAGES = int(os.getenv("LOG_EVERY_N_MESSAGES", "20"))
+MS6_API_URL = os.getenv("MS6_API_URL", "http://ms6-machine:8000")
 
 
 @dataclass
@@ -93,6 +95,54 @@ def select_profiles() -> list[MachineProfile]:
         profiles = CORE_MACHINE_PROFILES
 
     return profiles[: max(1, min(MACHINE_COUNT, len(profiles)))]
+
+def fetch_active_machines_from_ms6() -> list[dict]:
+    try:
+        resp = requests.get(f"{MS6_API_URL}/machines", timeout=3)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"[sim] Error fetching machines from MS6: {e}")
+    return []
+
+def sync_machines_with_ms6(current_machines: list[MachineState]) -> list[MachineState]:
+    ms6_data = fetch_active_machines_from_ms6()
+    if not ms6_data:
+        return current_machines
+
+    active_ids = {m["id"] for m in ms6_data if m.get("status") != "offline"}
+    
+    # 1. Remove machines that are no longer in MS6 or are offline
+    new_machine_list = [m for m in current_machines if m.device_id in active_ids]
+    current_ids = {m.device_id for m in new_machine_list}
+
+    # 2. Add new machines from MS6 that we aren't tracking yet
+    for m in ms6_data:
+        m_id = m["id"]
+        if m_id in active_ids and m_id not in current_ids:
+            # Try to find a matching profile from CORE, else build a generic one
+            matching_profile = next((p for p in CORE_MACHINE_PROFILES if p.device_id == m_id), None)
+            
+            if not matching_profile:
+                # Build a generic profile based on MS6 properties
+                matching_profile = MachineProfile(
+                    device_id=m_id,
+                    machine_type=m.get("type", "generic"),
+                    line=m.get("location", "unknown").split("-")[0].strip() if "-" in m.get("location", "") else m.get("location", "unknown"),
+                    zone="Z1",
+                    temp_base=50.0,
+                    temp_amp=5.0,
+                    vib_base=2.0,
+                    vib_amp=0.5,
+                    rpm_base=1500.0,
+                    rpm_amp=50.0,
+                    pressure_bar_base=120.0
+                )
+            
+            new_machine_list.append(create_machine(matching_profile))
+            print(f"[sim] Added dynamic machine from MS6: {m_id} ({matching_profile.machine_type})")
+            
+    return new_machine_list
 
 
 def maybe_trigger_network_outage() -> bool:
@@ -257,7 +307,15 @@ def main() -> None:
 
     start_manual_command_listener()
 
+    last_sync = 0
+    SYNC_INTERVAL = 10
+
     while True:
+        now = time.time()
+        if now - last_sync > SYNC_INTERVAL:
+            machines = sync_machines_with_ms6(machines)
+            last_sync = now
+
         sleep_sec = random.choice(INTERVAL_OPTIONS_SEC)
         if maybe_trigger_network_outage():
             time.sleep(sleep_sec)
