@@ -24,10 +24,9 @@ import os
 import logging
 from typing import List, Dict
 import pandas as pd
-import torch
-from chronos import BaseChronosPipeline
 from datetime import datetime, timezone
 from app.celery_app import celery_app
+from app.sensors import ALL_SENSORS as SENSOR_NAMES, score_sensor_value
 
 # Configure logging
 logging.basicConfig(
@@ -39,45 +38,35 @@ logger = logging.getLogger("ms3-tasks")
 # ── Sensor catalogue ────────────────────────────────────────────────────────
 # All 9 sensors this system monitors. main.py uses this list to decide which
 # sensor tasks to dispatch (only those actually present in the payload).
-ALL_SENSORS: List[str] = [
-    "temperature_c",
-    "vibration_rms",
-    "rpm",
-    "pressure_bar",
-    "flow_lpm",
-    "current_a",
-    "oil_temp_c",
-    "humidity_pct",
-    "power_kw",
-]
+ALL_SENSORS = SENSOR_NAMES
 
 # ── Per-sensor anomaly thresholds ────────────────────────────────────────────
 # score = clamp((predicted_p90 − warn) / range, 0.0, 1.0)
 # Tune these based on real operating conditions.
-SENSOR_THRESHOLDS: Dict[str, Dict[str, float]] = {
-    "temperature_c":  {"warn":  70.0, "range": 40.0},
-    "vibration_rms":  {"warn":   4.0, "range":  6.0},
-    "rpm":            {"warn": 1500.0, "range": 500.0},
-    "pressure_bar":   {"warn":   8.0, "range":  4.0},
-    "flow_lpm":       {"warn":  50.0, "range": 30.0},
-    "current_a":      {"warn":  20.0, "range": 10.0},
-    "oil_temp_c":     {"warn":  80.0, "range": 30.0},
-    "humidity_pct":   {"warn":  80.0, "range": 20.0},
-    "power_kw":       {"warn":  15.0, "range":  5.0},
-}
+SENSOR_THRESHOLDS: Dict[str, Dict[str, float]] = {}
 
 # ── Chronos model (lazy-loaded once per worker process) ──────────────────────
 _pipeline = None
 
 
-def get_pipeline() -> BaseChronosPipeline:
+def get_pipeline():
     """Load and cache the Chronos model (one instance per Celery worker process)."""
     global _pipeline
     if _pipeline is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"Loading Chronos model on {device} ...")
+        import torch
+        from chronos import BaseChronosPipeline
+
+        model_id = os.getenv("CHRONOS_MODEL_ID", "Stalemartyr/chronos-finetuned")
+        requested_device = os.getenv("CHRONOS_DEVICE", "auto").strip().lower()
+        cuda_available = torch.cuda.is_available()
+
+        if requested_device == "cuda" and not cuda_available:
+            logger.warning("CHRONOS_DEVICE=cuda requested but CUDA is unavailable; falling back to CPU.")
+
+        device = "cuda" if cuda_available and requested_device in {"auto", "cuda"} else "cpu"
+        logger.info(f"Loading Chronos model '{model_id}' on {device} ...")
         _pipeline = BaseChronosPipeline.from_pretrained(
-            "Stalemartyr/chronos-finetuned", device_map=device
+            model_id, device_map=device
         )
         logger.info("Chronos model ready.")
     return _pipeline
@@ -88,10 +77,7 @@ def _score_sensor(predicted_value: float, sensor_name: str) -> float:
     Map a sensor's predicted worst-case value to an anomaly score [0.0, 1.0].
     0.0 = well within normal range.  1.0 = critical anomaly.
     """
-    if sensor_name not in SENSOR_THRESHOLDS:
-        return 0.0
-    t = SENSOR_THRESHOLDS[sensor_name]
-    return float(max(0.0, min(1.0, (predicted_value - t["warn"]) / t["range"])))
+    return score_sensor_value(predicted_value, sensor_name)
 
 
 # ── Celery task ──────────────────────────────────────────────────────────────
@@ -159,9 +145,15 @@ def run_inference_sensor(
         if len(df_resampled) < 10:
             logger.warning(
                 f"[{device_id}/{sensor_name}] Only {len(df_resampled)} rows after resample — "
-                "need at least 10. Skipping."
+                "using threshold fallback."
             )
-            return _zero
+            worst_current = float(df_clean[sensor_name].max())
+            return {
+                "device_id": device_id,
+                "sensor": sensor_name,
+                "score": _score_sensor(worst_current, sensor_name),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
 
         logger.info(
             f"[{device_id}/{sensor_name}] Running Chronos on {len(df_resampled)} rows "
@@ -169,7 +161,20 @@ def run_inference_sensor(
         )
 
         # ── 3. Chronos forecast ───────────────────────────────────────────────────
-        pipeline = get_pipeline()
+        try:
+            pipeline = get_pipeline()
+        except Exception as exc:
+            logger.warning(
+                f"[{device_id}/{sensor_name}] Chronos unavailable, using threshold fallback: {exc}"
+            )
+            worst_current = float(df_resampled[sensor_name].max())
+            return {
+                "device_id": device_id,
+                "sensor": sensor_name,
+                "score": _score_sensor(worst_current, sensor_name),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
         df_pred = pipeline.predict_df(
             df_resampled,
             prediction_length=prediction_length,

@@ -22,7 +22,12 @@ export interface Machine {
   location: string;
   installDate: string;
   status: 'normal' | 'warning' | 'critical' | 'offline';
+  storedStatus?: 'normal' | 'warning' | 'critical' | 'offline';
+  statusReason?: 'online' | 'manual_offline' | 'telemetry_missing' | 'telemetry_stale';
   healthScore: number;
+  healthCeiling?: number;
+  failureCount?: number;
+  lastTelemetryAt?: string | null;
   lastMaintenance: string;
   model: string;
   serialNumber: string;
@@ -49,7 +54,7 @@ export interface AnomalyEvent {
   recommendedAction: string;
   status: 'new' | 'acknowledged' | 'resolved';
   sensorType: string;
-  actualValue: number;
+  actualValue: number | string;
   expectedRange: string;
 }
 
@@ -111,6 +116,12 @@ export const mockUsers: User[] = [
     createdAt: '2025-10-15T08:00:00Z',
   },
   {
+    id: 'u3',
+    username: 'security_admin',
+    password: 'demo1234',
+    name: 'Security Admin',
+    role: 'admin',
+    email: 'security_admin@omnivigil.io',
     createdAt: '2025-12-01T08:00:00Z',
   },
   {
