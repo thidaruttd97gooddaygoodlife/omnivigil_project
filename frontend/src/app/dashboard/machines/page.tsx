@@ -46,7 +46,7 @@ export default function MachinesPage() {
 
     const openEdit = (m: Machine) => {
         setEditId(m.id);
-        setForm({ name: m.name, type: m.type, location: m.location, model: m.model, serialNumber: m.serialNumber, installDate: m.installDate, status: m.status, healthScore: m.healthScore });
+        setForm({ name: m.name, type: m.type, location: m.location, model: m.model, serialNumber: m.serialNumber, installDate: m.installDate, status: m.storedStatus ?? m.status, healthScore: m.healthScore });
         setShowModal(true);
     };
 

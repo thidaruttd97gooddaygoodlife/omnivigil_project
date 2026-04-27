@@ -113,6 +113,26 @@ services:
     mem_limit: 512m
     cpus: 0.75
 
+  ms3-ai-DB:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: ${AI_POSTGRES_USER:-omni}
+      POSTGRES_PASSWORD: ${AI_POSTGRES_PASSWORD:-omni_password}
+      POSTGRES_DB: ${AI_POSTGRES_DB:-ai_engine}
+    volumes:
+      - postgres_ai_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AI_POSTGRES_USER:-omni} -d ${AI_POSTGRES_DB:-ai_engine}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 0.75
+
   ms2-ingestor:
     build:
       context: ./services/ms2-ingestor
@@ -125,6 +145,9 @@ services:
       INFLUXDB_ORG: ${INFLUXDB_ORG:-omnivigil}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-telemetry}
       AI_ENGINE_URL: http://ms3-ai-engine:8003
+      AI_ENGINE_TIMEOUT_SECONDS: ${AI_ENGINE_TIMEOUT_SECONDS:-300}
+      MACHINE_SERVICE_URL: http://ms6-machine:8006
+      MACHINE_TOUCH_TIMEOUT_SECONDS: ${MACHINE_TOUCH_TIMEOUT_SECONDS:-2}
       MQTT_BROKER: mosquitto
       MQTT_PORT: 1883
       MQTT_TOPIC: omnivigil/telemetry
@@ -144,27 +167,67 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
+      ms6-machine:
+        condition: service_healthy
 
   ms3-ai-engine:
     build:
       context: ./services/ms3-ai-engine
+      args:
+        INSTALL_ML: "false"
     restart: unless-stopped
     ports:
       - "8003:8003"
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://redis:6379/0
       ALERT_URL: http://ms4-alert:8004
       MAINTENANCE_URL: http://ms5-maintenance:8005
+      MACHINE_SERVICE_URL: http://ms6-machine:8006
+      POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
+      AI_ENABLE_WORKER_INFERENCE: ${AI_ENABLE_WORKER_INFERENCE:-true}
+      AI_WORKER_RESULT_TIMEOUT_SECONDS: ${AI_WORKER_RESULT_TIMEOUT_SECONDS:-300}
+      REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
       interval: 10s
       timeout: 4s
       retries: 10
       start_period: 15s
-    mem_limit: 384m
+    mem_limit: 512m
     cpus: 0.5
     depends_on:
       redis:
+        condition: service_healthy
+      ms3-ai-DB:
+        condition: service_healthy
+      ms6-machine:
+        condition: service_healthy
+
+  ms3-worker:
+    build:
+      context: ./services/ms3-ai-engine
+      args:
+        INSTALL_ML: ${MS3_INSTALL_ML:-true}
+        TORCH_INDEX_URL: ${MS3_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ALERT_URL: http://ms4-alert:8004
+      MAINTENANCE_URL: http://ms5-maintenance:8005
+      POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
+      AI_WORKER_TASK_TIME_LIMIT_SECONDS: ${AI_WORKER_TASK_TIME_LIMIT_SECONDS:-900}
+      CHRONOS_MODEL_ID: ${CHRONOS_MODEL_ID:-Stalemartyr/chronos-finetuned}
+      CHRONOS_DEVICE: ${CHRONOS_DEVICE:-auto}
+      HF_HOME: /cache/huggingface
+    volumes:
+      - hf_cache_data:/cache/huggingface
+    mem_limit: 6144m
+    cpus: 1.0
+    depends_on:
+      redis:
+        condition: service_healthy
+      ms3-ai-DB:
         condition: service_healthy
 
   ms4-alert:
@@ -195,6 +258,10 @@ services:
       - "8005:8005"
     environment:
       POSTGRES_URL: postgres://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@postgres:5432/${MAINT_POSTGRES_DB:-maintenance}
+      MACHINE_SERVICE_URL: http://ms6-machine:8006
+      REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
+      JWT_SECRET: ${JWT_SECRET:-omni_dev_secret_change_me}
+      JWT_ALGORITHM: HS256
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=2)"]
       interval: 10s
@@ -205,6 +272,8 @@ services:
     cpus: 0.5
     depends_on:
       postgres:
+        condition: service_healthy
+      ms6-machine:
         condition: service_healthy
 
   ms1-auth:
@@ -261,6 +330,11 @@ services:
     restart: unless-stopped
     ports:
       - "8006:8006"
+    environment:
+      MACHINE_DATA_FILE: /data/machines.json
+      MACHINE_OFFLINE_AFTER_MINUTES: ${MACHINE_OFFLINE_AFTER_MINUTES:-5}
+    volumes:
+      - machine_registry_data:/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/health', timeout=2)"]
       interval: 10s
@@ -276,3 +350,6 @@ volumes:
   rabbitmq_data:
   postgres_maintenance_data:
   postgres_auth_data:
+  postgres_ai_data:
+  hf_cache_data:
+  machine_registry_data:

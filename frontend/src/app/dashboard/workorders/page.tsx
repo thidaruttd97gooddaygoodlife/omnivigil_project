@@ -1,10 +1,71 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { mockWorkOrders, mockMachines, WorkOrder, Machine } from '@/lib/mockData';
 import { maintenanceApi, machineApi } from '@/lib/api';
 import { ClipboardList, Plus, Clock, CheckCircle, AlertTriangle, Loader } from 'lucide-react';
+
+const DEMO_WORK_ORDERS_KEY = 'omnivigil_demo_workorders';
+const PRIORITY_ORDER: Record<WorkOrder['priority'], number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+const DEMO_STATUS_TRANSITIONS: Record<WorkOrder['status'], WorkOrder['status'][]> = {
+    open: ['open', 'in_progress', 'completed', 'cancelled'],
+    in_progress: ['in_progress', 'completed', 'cancelled'],
+    completed: ['completed'],
+    cancelled: ['cancelled', 'open', 'in_progress'],
+};
+
+type ApiWorkOrder = {
+    work_order_id: string;
+    machine_id?: string;
+    issue?: string;
+    description?: string;
+    priority?: WorkOrder['priority'];
+    status?: string;
+    assigned_to?: string;
+    created_at: string;
+    updated_at?: string;
+    completed_at?: string;
+    acknowledged_at?: string;
+    estimated_hours?: number;
+    source_alert_id?: string;
+};
+
+const persistDemoOrders = (items: WorkOrder[]) => {
+    localStorage.setItem(DEMO_WORK_ORDERS_KEY, JSON.stringify(items));
+};
+
+const loadDemoOrders = (): WorkOrder[] => {
+    const raw = localStorage.getItem(DEMO_WORK_ORDERS_KEY);
+    if (!raw) {
+        persistDemoOrders(mockWorkOrders);
+        return mockWorkOrders;
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+            persistDemoOrders(mockWorkOrders);
+            return mockWorkOrders;
+        }
+        return parsed as WorkOrder[];
+    } catch {
+        persistDemoOrders(mockWorkOrders);
+        return mockWorkOrders;
+    }
+};
+
+const getCreatedAtTime = (order: WorkOrder) => {
+    const timestamp = new Date(order.createdAt).getTime();
+    return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const sortWorkOrdersNewestFirst = (items: WorkOrder[]) => {
+    return [...items].sort((a, b) => {
+        const createdAtDiff = getCreatedAtTime(b) - getCreatedAtTime(a);
+        if (createdAtDiff !== 0) return createdAtDiff;
+        return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+    });
+};
 
 export default function WorkOrdersPage() {
     const { hasAccess, user, isDemoMode } = useAuth();
@@ -13,8 +74,11 @@ export default function WorkOrdersPage() {
     const [orders, setOrders] = useState<WorkOrder[]>([]);
     const [machines, setMachines] = useState<Machine[]>([]);
     const [form, setForm] = useState({ machineId: '', title: '', description: '', priority: 'medium' as WorkOrder['priority'], assignedTo: '', estimatedHours: 2 });
+    const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+    const [editForm, setEditForm] = useState({ assignedTo: '', estimatedHours: '2' });
+    const statusOptionsByState = DEMO_STATUS_TRANSITIONS;
 
-    const loadMachines = async () => {
+    const loadMachines = useCallback(async () => {
         if (isDemoMode) {
             setMachines(mockMachines);
             return;
@@ -22,24 +86,25 @@ export default function WorkOrdersPage() {
         try {
             const res = await machineApi.get('/machines');
             setMachines(res.data);
-        } catch (err) {
+        } catch {
             console.error('Failed to load MS6 machines');
             setMachines(mockMachines); // Fallback to mock if API fails
         }
-    };
+    }, [isDemoMode]);
 
-    const loadOrders = async () => {
+    const loadOrders = useCallback(async () => {
         if (isDemoMode) {
-             setOrders(mockWorkOrders);
-             return;
+            setOrders(loadDemoOrders());
+            return;
         }
 
         try {
             const res = await maintenanceApi.get('/work-orders');
-            const apiOrders: WorkOrder[] = res.data.items.map((item: any) => {
+            const apiOrders: WorkOrder[] = (res.data.items as ApiWorkOrder[]).map((item) => {
                 // Map DB status to Frontend status
                 let mappedStatus: WorkOrder['status'] = 'open';
-                if (item.status === 'acknowledged' || item.status === 'completed') mappedStatus = 'completed';
+                if (item.status === 'completed') mappedStatus = 'completed';
+                else if (item.status === 'acknowledged') mappedStatus = 'in_progress';
                 else if (item.status === 'in_progress') mappedStatus = 'in_progress';
                 else if (item.status === 'cancelled') mappedStatus = 'cancelled';
                 
@@ -48,40 +113,46 @@ export default function WorkOrdersPage() {
                     machineId: item.machine_id || 'unknown',
                     machineName: 'Resolving...',
                     title: item.issue || 'No Title',
-                    description: item.issue,
+                    description: item.description || item.issue || '',
                     priority: item.priority || 'medium',
                     status: mappedStatus,
-                    assignedTo: 'Unassigned',
+                    assignedTo: item.assigned_to || 'Unassigned',
                     createdAt: item.created_at,
-                    updatedAt: item.acknowledged_at || item.created_at,
-                    estimatedHours: 2,
+                    updatedAt: item.updated_at || item.completed_at || item.acknowledged_at || item.created_at,
+                    estimatedHours: Number(item.estimated_hours ?? 2),
+                    anomalyId: item.source_alert_id || undefined,
                 };
             });
-            setOrders([...apiOrders.reverse()]);
-        } catch (err) {
+            setOrders(apiOrders);
+        } catch {
             console.error('Failed to load live MS5 work orders');
         }
-    };
+    }, [isDemoMode]);
 
     useEffect(() => { 
         loadMachines();
         loadOrders(); 
-    }, [isDemoMode]);
+    }, [loadMachines, loadOrders]);
 
     const [showConfirm, setShowConfirm] = useState<{ id: string, status: string } | null>(null);
 
-    const isEngineer = user?.role === 'engineer';
     const isSupervisor = user?.role === 'supervisor';
     const isAdmin = user?.role === 'admin';
     
-    const canCreate = isEngineer || isAdmin;
-    const canEditStatus = isSupervisor || isAdmin;
+    const canManageWorkOrders = isSupervisor || isAdmin;
+    const canCreate = canManageWorkOrders;
+    const canEditStatus = canManageWorkOrders;
+    const canEditAssignment = canManageWorkOrders;
 
+    const sortedFilteredOrders = useMemo(() => {
+        const filtered = filter === 'all' ? orders : orders.filter(o => o.status === filter);
+        return sortWorkOrdersNewestFirst(filtered);
+    }, [filter, orders]);
     if (!hasAccess('workorders') && user?.role !== 'admin') {
         return <div className="no-access"><h2>🔒 Access Denied</h2><p>You do not have permission to view this page.</p></div>;
     }
 
-    const filtered = filter === 'all' ? orders : orders.filter(o => o.status === filter);
+
     const statusCounts = {
         open: orders.filter(o => o.status === 'open').length,
         in_progress: orders.filter(o => o.status === 'in_progress').length,
@@ -95,14 +166,42 @@ export default function WorkOrdersPage() {
         cancelled: <Clock size={14} />,
     };
 
-    const priorityOrder = { urgent: 0, high: 1, medium: 2, low: 3 };
-
     const handleCreate = async () => {
+        const selectedMachine = machines.find((m) => m.id === form.machineId);
+        const now = new Date().toISOString();
         try {
+            if (isDemoMode) {
+                const newOrder: WorkOrder = {
+                    id: `WO-DEMO-${Date.now()}`,
+                    machineId: form.machineId,
+                    machineName: selectedMachine?.name || form.machineId,
+                    title: form.title.trim(),
+                    description: (form.description || form.title).trim(),
+                    priority: form.priority,
+                    status: 'open',
+                    assignedTo: form.assignedTo.trim() || 'Unassigned',
+                    createdAt: now,
+                    updatedAt: now,
+                    estimatedHours: Number(form.estimatedHours) || 0,
+                };
+
+                setOrders((prev) => {
+                    const updated = [newOrder, ...prev];
+                    persistDemoOrders(updated);
+                    return updated;
+                });
+                setShowModal(false);
+                setForm({ machineId: '', title: '', description: '', priority: 'medium', assignedTo: '', estimatedHours: 2 });
+                return;
+            }
+
             await maintenanceApi.post('/work-orders', {
                 machine_id: form.machineId,
                 issue: form.title,
-                priority: form.priority
+                description: form.description,
+                priority: form.priority,
+                assigned_to: form.assignedTo || null,
+                estimated_hours: form.estimatedHours,
             });
             await loadOrders();
             setShowModal(false);
@@ -118,11 +217,30 @@ export default function WorkOrdersPage() {
 
         try {
             if (isDemoMode) {
-                // In demo mode, update local state
-                setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus as WorkOrder['status'] } : o));
+                setOrders((prev) => {
+                    const updated = prev.map((order) => {
+                        if (order.id !== orderId) return order;
+
+                        const next = newStatus as WorkOrder['status'];
+                        const allowed = DEMO_STATUS_TRANSITIONS[order.status];
+                        if (!allowed.includes(next)) return order;
+
+                        return {
+                            ...order,
+                            status: next,
+                            updatedAt: new Date().toISOString(),
+                        };
+                    });
+                    persistDemoOrders(updated);
+                    return updated;
+                });
             } else {
                 if (newStatus === 'completed') {
-                    await maintenanceApi.patch(`/work-orders/${orderId}/ack`);
+                    await maintenanceApi.patch(`/work-orders/${orderId}/complete`, {
+                        action_taken: 'Completed from dashboard',
+                    });
+                } else if (newStatus === 'in_progress') {
+                    await maintenanceApi.patch(`/work-orders/${orderId}/accept`);
                 } else {
                     await maintenanceApi.patch(`/work-orders/${orderId}/status`, { status: newStatus });
                 }
@@ -137,6 +255,57 @@ export default function WorkOrdersPage() {
 
     const handleStatusChange = (orderId: string, newStatus: string) => {
         setShowConfirm({ id: orderId, status: newStatus });
+    };
+
+    const startAssignmentEdit = (order: WorkOrder) => {
+        setEditingOrderId(order.id);
+        setEditForm({
+            assignedTo: order.assignedTo === 'Unassigned' ? '' : order.assignedTo,
+            estimatedHours: String(order.estimatedHours ?? 2),
+        });
+    };
+
+    const cancelAssignmentEdit = () => {
+        setEditingOrderId(null);
+        setEditForm({ assignedTo: '', estimatedHours: '2' });
+    };
+
+    const saveAssignmentEdit = async (orderId: string) => {
+        const estimatedHours = Number(editForm.estimatedHours);
+        if (!Number.isFinite(estimatedHours) || estimatedHours < 0) {
+            alert('Est. Hours must be a number greater than or equal to 0.');
+            return;
+        }
+
+        const assignedTo = editForm.assignedTo.trim();
+
+        try {
+            if (isDemoMode) {
+                setOrders((prev) => {
+                    const updated = prev.map((order) => (
+                        order.id === orderId
+                            ? {
+                                ...order,
+                                assignedTo: assignedTo || 'Unassigned',
+                                estimatedHours,
+                                updatedAt: new Date().toISOString(),
+                            }
+                            : order
+                    ));
+                    persistDemoOrders(updated);
+                    return updated;
+                });
+            } else {
+                await maintenanceApi.patch(`/work-orders/${orderId}`, {
+                    assigned_to: assignedTo || null,
+                    estimated_hours: estimatedHours,
+                });
+                await loadOrders();
+            }
+            cancelAssignmentEdit();
+        } catch (err) {
+            console.error('Failed to update work order assignment', err);
+        }
     };
 
     return (
@@ -195,10 +364,11 @@ export default function WorkOrdersPage() {
                             <th>Assigned To</th>
                             <th>Est. Hours</th>
                             <th>Created</th>
+                            {canEditAssignment && <th>Actions</th>}
                         </tr>
                     </thead>
                     <tbody>
-                        {filtered.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]).map(order => (
+                        {sortedFilteredOrders.map(order => (
                             <tr key={order.id}>
                                 <td style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--accent-cyan)', fontSize: '0.8rem' }}>{order.id}</td>
                                 <td style={{ fontWeight: 500, color: 'var(--text-primary)', maxWidth: '200px' }}>
@@ -215,10 +385,13 @@ export default function WorkOrdersPage() {
                                             value={order.status}
                                             onChange={(e) => handleStatusChange(order.id, e.target.value)}
                                         >
-                                            <option value="open">Open</option>
-                                            <option value="in_progress">In Progress</option>
-                                            <option value="completed">Completed</option>
-                                            <option value="cancelled">Cancelled</option>
+                                            {statusOptionsByState[order.status].map((statusOption) => (
+                                                <option key={statusOption} value={statusOption}>
+                                                    {statusOption === 'in_progress'
+                                                        ? 'In Progress'
+                                                        : statusOption.charAt(0).toUpperCase() + statusOption.slice(1)}
+                                                </option>
+                                            ))}
                                         </select>
                                     ) : (
                                         <span className={`badge ${order.status === 'completed' ? 'badge-normal' : order.status === 'in_progress' ? 'badge-info' : order.status === 'open' ? 'badge-warning' : 'badge-offline'}`}>
@@ -226,11 +399,55 @@ export default function WorkOrdersPage() {
                                         </span>
                                     )}
                                 </td>
-                                <td style={{ fontSize: '0.85rem' }}>{order.assignedTo}</td>
-                                <td style={{ textAlign: 'center' }}>{order.estimatedHours}h</td>
+                                <td style={{ fontSize: '0.85rem', minWidth: '160px' }}>
+                                    {editingOrderId === order.id ? (
+                                        <input
+                                            className="input"
+                                            placeholder="Engineer name"
+                                            value={editForm.assignedTo}
+                                            onChange={(e) => setEditForm({ ...editForm, assignedTo: e.target.value })}
+                                            style={{ padding: '6px 8px', fontSize: '0.8rem', height: 'auto' }}
+                                        />
+                                    ) : (
+                                        order.assignedTo
+                                    )}
+                                </td>
+                                <td style={{ textAlign: 'center', minWidth: '110px' }}>
+                                    {editingOrderId === order.id ? (
+                                        <input
+                                            className="input"
+                                            type="number"
+                                            min={0}
+                                            step={0.5}
+                                            value={editForm.estimatedHours}
+                                            onChange={(e) => setEditForm({ ...editForm, estimatedHours: e.target.value })}
+                                            style={{ padding: '6px 8px', fontSize: '0.8rem', height: 'auto', textAlign: 'center' }}
+                                        />
+                                    ) : (
+                                        `${order.estimatedHours}h`
+                                    )}
+                                </td>
                                 <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                                     {new Date(order.createdAt).toLocaleDateString('th-TH', { month: 'short', day: 'numeric' })}
                                 </td>
+                                {canEditAssignment && (
+                                    <td style={{ whiteSpace: 'nowrap' }}>
+                                        {editingOrderId === order.id ? (
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <button className="btn btn-sm btn-primary" onClick={() => saveAssignmentEdit(order.id)}>
+                                                    Save
+                                                </button>
+                                                <button className="btn btn-sm btn-secondary" onClick={cancelAssignmentEdit}>
+                                                    Cancel
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <button className="btn btn-sm btn-ghost" onClick={() => startAssignmentEdit(order)}>
+                                                Edit
+                                            </button>
+                                        )}
+                                    </td>
+                                )}
                             </tr>
                         ))}
                     </tbody>
@@ -307,7 +524,7 @@ export default function WorkOrdersPage() {
                         </div>
                         <h2 style={{ marginBottom: '10px' }}>Confirm Status Change</h2>
                         <p style={{ color: 'var(--text-secondary)', marginBottom: '30px' }}>
-                            Are you sure you want to change the status of this work order to <strong>"{showConfirm.status.replace('_', ' ')}"</strong>?
+                            Are you sure you want to change the status of this work order to <strong>&quot;{showConfirm.status.replace('_', ' ')}&quot;</strong>?
                         </p>
                         <div className="form-actions" style={{ justifyContent: 'center', gap: '12px' }}>
                             <button className="btn btn-secondary" onClick={() => setShowConfirm(null)}>Cancel</button>

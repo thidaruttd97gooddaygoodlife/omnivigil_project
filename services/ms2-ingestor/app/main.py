@@ -91,12 +91,15 @@ class HistoryRecord(BaseModel):
 
 
 _ai_engine_url = os.getenv("AI_ENGINE_URL", "").strip()
+_ai_engine_timeout_seconds = float(os.getenv("AI_ENGINE_TIMEOUT_SECONDS", "300"))
 _mqtt_broker = os.getenv("MQTT_BROKER", "localhost")
 _mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
 _mqtt_topic = os.getenv("MQTT_TOPIC", "omnivigil/telemetry")
 _mqtt_username = os.getenv("MQTT_USERNAME")
 _mqtt_password = os.getenv("MQTT_PASSWORD")
 _mqtt_qos = int(os.getenv("MQTT_QOS", "1"))
+_machine_service_url = os.getenv("MACHINE_SERVICE_URL", "").strip().rstrip("/")
+_machine_touch_timeout_seconds = float(os.getenv("MACHINE_TOUCH_TIMEOUT_SECONDS", "2.0"))
 
 _influx_url = os.getenv("INFLUXDB_URL")
 _influx_token = os.getenv("INFLUXDB_TOKEN")
@@ -267,6 +270,25 @@ def _write_influx(reading: TelemetryReading, quality: Optional[QualityRecord] = 
     return True
 
 
+def _touch_machine_last_telemetry(cleaned: TelemetryReading) -> None:
+    if not _machine_service_url:
+        return
+
+    payload = {"lastTelemetryAt": cleaned.timestamp.isoformat()}
+    try:
+        response = httpx.put(
+            f"{_machine_service_url}/machines/{cleaned.device_id}",
+            json=payload,
+            timeout=_machine_touch_timeout_seconds,
+        )
+        if response.status_code == 404:
+            logger.info("Telemetry received for unregistered machine %s", cleaned.device_id)
+            return
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to update last telemetry for machine %s: %s", cleaned.device_id, exc)
+
+
 def _store_reading(cleaned: TelemetryReading) -> None:
     with _state_lock:
         previous = _last_by_device.get(cleaned.device_id)
@@ -285,6 +307,8 @@ def _store_reading(cleaned: TelemetryReading) -> None:
         _stats["quality_avg_score"] = round(((prev_avg * (total - 1)) + quality.quality_score) / total, 2)
         _stats["last_ingest_at"] = cleaned.timestamp.isoformat()
         _stats["last_device_id"] = cleaned.device_id
+
+    _touch_machine_last_telemetry(cleaned)
 
     # In batch mode, we just write. Let the client handle queueing/batching.
     try:
@@ -332,7 +356,11 @@ def _call_ai_engine(telemetry: List[TelemetryReading]) -> tuple[Optional[dict], 
 
     payload = {"telemetry": [item.model_dump(mode="json") for item in telemetry]}
     try:
-        response = httpx.post(f"{_ai_engine_url}/analyze", json=payload, timeout=5.0)
+        response = httpx.post(
+            f"{_ai_engine_url}/analyze",
+            json=payload,
+            timeout=_ai_engine_timeout_seconds,
+        )
         response.raise_for_status()
         return response.json(), None
     except httpx.HTTPError as exc:
