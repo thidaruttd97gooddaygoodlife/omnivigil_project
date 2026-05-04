@@ -56,23 +56,6 @@ services:
     mem_limit: 256m
     cpus: 0.5
 
-  rabbitmq:
-    image: rabbitmq:3-management
-    restart: unless-stopped
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-    mem_limit: 512m
-    cpus: 0.75
-
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
@@ -125,10 +108,13 @@ services:
       INFLUXDB_ORG: ${INFLUXDB_ORG:-omnivigil}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-telemetry}
       AI_ENGINE_URL: http://ms3-ai-engine:8003
+      MS1_AUTH_URL: http://ms1-auth:8001
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-omni_internal_key}
       MQTT_BROKER: mosquitto
       MQTT_PORT: 1883
       MQTT_TOPIC: omnivigil/telemetry
       MQTT_QOS: 1
+      REDIS_URL: redis://redis:6379/0
       MAX_IN_MEMORY_READINGS: 5000
       MAX_PENDING_INFLUX_WRITES: 10000
     healthcheck:
@@ -144,6 +130,10 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      ms1-auth:
+        condition: service_healthy
 
   ms3-ai-engine:
     build:
@@ -153,8 +143,7 @@ services:
       - "8003:8003"
     environment:
       REDIS_URL: redis://redis:6379/0
-      ALERT_URL: http://ms4-alert:8004
-      MAINTENANCE_URL: http://ms5-maintenance:8005
+      REDIS_EVENT_CHANNEL: anomaly_detected
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
       interval: 10s
@@ -174,8 +163,7 @@ services:
     restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379/0
-      ALERT_URL: http://ms4-alert:8004
-      MAINTENANCE_URL: http://ms5-maintenance:8005
+      REDIS_EVENT_CHANNEL: anomaly_detected
     mem_limit: 2048m
     cpus: 1.0
     depends_on:
@@ -189,7 +177,9 @@ services:
     ports:
       - "8004:8004"
     environment:
-      RABBITMQ_URL: amqp://rabbitmq:5672
+      ALERT_POSTGRES_URL: postgresql://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@postgres:5432/${MAINT_POSTGRES_DB:-maintenance}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_EVENT_CHANNEL: anomaly_detected
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
       interval: 10s
@@ -199,7 +189,9 @@ services:
     mem_limit: 256m
     cpus: 0.5
     depends_on:
-      rabbitmq:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   ms5-maintenance:
@@ -210,6 +202,11 @@ services:
       - "8005:8005"
     environment:
       POSTGRES_URL: postgres://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@postgres:5432/${MAINT_POSTGRES_DB:-maintenance}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_EVENT_CHANNEL: anomaly_detected
+      AUTO_CREATE_THRESHOLD: 0.9
+      MS1_AUTH_URL: http://ms1-auth:8001
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-omni_internal_key}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=2)"]
       interval: 10s
@@ -220,6 +217,10 @@ services:
     cpus: 0.5
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ms1-auth:
         condition: service_healthy
 
   ms1-auth:
@@ -254,7 +255,7 @@ services:
       MQTT_BROKER: mosquitto
       MQTT_PORT: 1883
       MQTT_TOPIC: omnivigil/telemetry
-      INTERVAL_OPTIONS_SEC: 10,20,30
+      INTERVAL_OPTIONS_SEC: 1,2,3,4,5
       ANOMALY_RATE: 0.04
       MACHINE_COUNT: 5
       NETWORK_DROP_RATE: 0.03
@@ -269,6 +270,5 @@ services:
 volumes:
   influxdb_data:
   redis_data:
-  rabbitmq_data:
   postgres_maintenance_data:
   postgres_auth_data:
