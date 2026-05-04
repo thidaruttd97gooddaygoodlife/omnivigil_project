@@ -88,7 +88,7 @@ docker compose exec sim-sensor sh -c 'echo cnc-spindle-301 > /tmp/force_anomaly'
 ## 8) Resource & Persistence Notes
 - ทุก service ตั้ง `restart: unless-stopped`
 - มี resource caps (`mem_limit`, `cpus`) เพื่อกัน service แย่งทรัพยากร
-- ใช้ named volumes สำหรับ `influxdb`, `postgres`, `redis`, `rabbitmq`
+- ใช้ named volumes สำหรับ `influxdb`, `postgres`, `redis`
 
 ## 9) Team Handoff (MS3)
 ส่งข้อมูลให้ทีม AI:

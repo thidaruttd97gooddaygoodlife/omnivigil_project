@@ -5,7 +5,8 @@
 ## 1) Scope ที่ส่งมอบแล้ว
 - MS2 รับข้อมูลจาก MQTT (`omnivigil/telemetry`)
 - Validate/Clean ข้อมูล telemetry ก่อนจัดเก็บ
-- เขียนข้อมูลลง InfluxDB measurement `telemetry`
+- เขียนข้อมูลลง InfluxDB measurement `telemetry` แบบ batch
+- เขียนข้อมูลลง Redis list ต่อ device ด้วย `RPUSH + LTRIM -5000 -1` (hot path)
 - มี retry buffer กรณี Influx เขียนไม่สำเร็จชั่วคราว
 - มี endpoint สำหรับตรวจงาน: `/health`, `/stats`, `/readings`
 
@@ -14,6 +15,7 @@
 - Measurement: `telemetry`
 - Tags: `device_id`, `machine_type`, `line`, `zone`
 - Fields: `temperature_c`, `vibration_rms`, `rpm`, `pressure_bar`, `flow_lpm`, `current_a`, `oil_temp_c`, `humidity_pct`, `power_kw`
+- Redis key format: `telemetry:device:<device_id>` (เก็บล่าสุด 5000 จุดต่อเครื่อง)
 
 ## 3) Environment ที่ MS2 ต้องมี
 - `INFLUXDB_URL`

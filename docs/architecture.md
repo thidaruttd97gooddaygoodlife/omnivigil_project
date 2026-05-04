@@ -13,9 +13,8 @@ flowchart LR
     MS2 --> InfluxDB[(InfluxDB)]
     MS2 --> MS3[MS3 AI Engine]
     MS3 --> Redis[(Redis Cache)]
-    MS3 --> RabbitMQ[(RabbitMQ Events)]
-    RabbitMQ --> MS4[MS4 Alert]
-    RabbitMQ --> MS5[MS5 Maintenance]
+    MS3 --> MS4[MS4 Alert]
+    MS3 --> MS5[MS5 Maintenance]
     MS4 --> LINE[LINE Notify]
     MS5 --> Postgres[(PostgreSQL)]
     FE --> MS2
@@ -27,9 +26,9 @@ flowchart LR
 ## Service Responsibilities
 - MS1 Auth: login + JWT + role-based authorization
 - MS2 Ingestor: รับ/clean ข้อมูล telemetry และเก็บลง InfluxDB
-- MS3 AI Engine: วิเคราะห์ anomaly score/risk และส่ง event ไป RabbitMQ
-- MS4 Alert: subscribe event แล้วส่งแจ้งเตือนหลายช่องทาง
-- MS5 Maintenance: subscribe event แล้วเปิด/ติดตามใบสั่งซ่อม
+- MS3 AI Engine: วิเคราะห์ anomaly score/risk และเรียก MS4/MS5 ผ่าน API
+- MS4 Alert: รับคำขอแจ้งเตือนแล้วส่งออกหลายช่องทาง
+- MS5 Maintenance: รับคำขอจาก MS3 เพื่อเปิด/ติดตามใบสั่งซ่อม
 
 ## Security Boundary
 - Frontend และทุก backend service ต้องใช้ JWT จาก MS1

@@ -4,6 +4,8 @@
 
 ## Features
 - Multi-machine simulation (default 5 เครื่องจริงจากไลน์ผลิต)
+- Gaussian noise simulation สำหรับค่าเซนเซอร์ให้ดูสมจริง
+- Intentional outlier injection เพื่อทดสอบการ clean/clamp ฝั่ง MS2
 - Network latency/drop simulation
 - Manual trigger anomaly
 
@@ -18,7 +20,7 @@
 - `MQTT_BROKER` (default `localhost`)
 - `MQTT_PORT` (default `1883`)
 - `MQTT_TOPIC` (default `omnivigil/telemetry`)
-- `INTERVAL_OPTIONS_SEC` (default `10,20,30`)
+- `INTERVAL_OPTIONS_SEC` (default `1,2,3,4,5`)
 - `INTERVAL_MS` (fallback legacy, default `5000`)
 - `ANOMALY_RATE` (default `0.03`)
 - `MACHINE_COUNT` (default `5`)
@@ -26,6 +28,24 @@
 - `NETWORK_DROP_RATE` (default `0.02`)
 - `NETWORK_DROP_DURATION_SEC` (default `8`)
 - `MANUAL_TRIGGER_FILE` (default `/tmp/force_anomaly`)
+
+## Telemetry Packet Contract (MQTT QoS 1)
+ทุก message ถูกส่งไปที่ `omnivigil/telemetry` ด้วย QoS 1 โดยใช้โครงสร้าง:
+
+```json
+{
+	"device_id": "pump-01",
+	"machine_type": "centrifugal-pump",
+	"line": "L1",
+	"zone": "mixing",
+	"ts": "2026-04-29T10:00:00Z",
+	"metrics": {
+		"temperature_c": 85.2,
+		"vibration_rms": 2.1,
+		"rpm": 1498.0
+	}
+}
+```
 
 ## Manual Trigger Anomaly
 มี 2 วิธี
