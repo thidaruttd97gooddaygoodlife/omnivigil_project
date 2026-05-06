@@ -53,7 +53,7 @@ def run_inference(telemetry_data: List[dict]) -> dict:
     id_column = "device_id"
     timestamp_column = "timestamp"
     target = ["temperature_c", "vibration_rms", "rpm"]
-    prediction_length = 24
+    prediction_length = 5    # forecast next 5 steps (consistent with tasks.py)
 
     df = pd.DataFrame(telemetry_data)
     df[timestamp_column] = pd.to_datetime(df[timestamp_column])
