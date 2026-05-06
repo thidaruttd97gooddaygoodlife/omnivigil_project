@@ -148,11 +148,15 @@ def startup() -> None:
 
 
 @app.get("/health")
+# Health check endpoint used by orchestration / liveness probes.
+# Returns minimal service metadata for MS1 auth.
 def health() -> dict:
     return {"status": "ok", "service": "ms1-auth"}
 
 
 @app.post("/auth/login", response_model=LoginResponse)
+# Login endpoint for clients to exchange username/password for a JWT.
+# Validates credentials and returns access token, expiry, and role.
 def login(request: LoginRequest) -> LoginResponse:
     user = _get_user_by_username(request.username)
     if not user or not _verify_password(request.password, user["password_hash"]):
@@ -167,6 +171,8 @@ def login(request: LoginRequest) -> LoginResponse:
 
 
 @app.get("/auth/verify", response_model=VerifyResponse)
+# Token verification endpoint. Used by other services or tooling to validate JWTs.
+# Returns parsed token claims and validity state.
 def verify(payload: dict = Depends(_current_token_payload)) -> VerifyResponse:
     return VerifyResponse(
         valid=True,
@@ -177,11 +183,15 @@ def verify(payload: dict = Depends(_current_token_payload)) -> VerifyResponse:
 
 
 @app.get("/auth/me", response_model=UserProfile)
+# Returns the authenticated user's profile details from the JWT claims.
+# Useful for client UI/profile display and for service discovery of identity.
 def me(payload: dict = Depends(_current_token_payload)) -> UserProfile:
     return UserProfile(username=payload["sub"], role=payload["role"])
 
 
 @app.get("/auth/authorize")
+# Role authorization check endpoint.
+# Returns whether the current JWT holder is allowed to perform actions requiring the requested role.
 def authorize(required_role: str, payload: dict = Depends(_current_token_payload)) -> dict:
     role = payload["role"]
     allowed = role == required_role or role == "admin"
