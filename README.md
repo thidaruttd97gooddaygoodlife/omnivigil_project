@@ -44,14 +44,15 @@ OmniVigil คือระบบ Microservices สำหรับงาน Predic
 - MS2 คำนวณ quality score
 - MS2 dual-write Influx + Redis list (trim ล่าสุด 5000 จุด)
 
-## 2) ของเพื่อน: ทั้งระบบ
+## 2) หน้าที่ของแต่ละ Microservice ในระบบ (สำหรับเพื่อนๆ)
 
-ระบบเต็มมี
-- MS1 Auth
-- MS2 Ingestor
-- MS3 AI Engine + Worker
-- MS4 Alert
-- MS5 Maintenance
+ระบบเต็มแบ่งออกเป็น 5 ไมโครเซอร์วิสหลักและ 1 ซิมูเลเตอร์:
+- **MS1 Auth**: ระบบจัดการผู้ใช้งานและการ Authentication (เข้าสู่ระบบ, ลงทะเบียน, ออก/ตรวจสอบ JWT Token)
+- **MS2 Ingestor**: รับข้อมูลจาก Sensor (ผ่าน MQTT), ทำการคลีนข้อมูล, ให้คะแนนคุณภาพ แล้วเขียนลง InfluxDB และ Redis (ส่วนที่คุณรับผิดชอบ)
+- **MS3 AI Engine + Worker**: ประมวลผลข้อมูลด้วย AI (เช่น ตรวจจับความผิดปกติ) แบบ Asynchronous โดยใช้ Redis queue
+- **MS4 Alert**: จัดการระบบแจ้งเตือน (เช่น ยิงแจ้งเตือนเข้า LINE Messaging API เมื่อเกิด Anomaly จาก AI)
+- **MS5 Maintenance**: จัดการข้อมูลการซ่อมบำรุง, สร้าง ติดตาม และอัปเดตตั๋วซ่อมบำรุงเมื่อเครื่องจักรมีปัญหา
+- **Sim Sensor**: (ตัวจำลอง) ส่งข้อมูล Telemetry สุ่มและยิง Anomaly ปลอมเข้า MQTT
 
 ### เพื่อนต้องทำต่อ (สถานะล่าสุด)
 - MS4: ต่อ LINE Messaging API จริงและทำ delivery handling ให้ครบ
@@ -117,29 +118,58 @@ docker compose -f docker-compose.managed.yml --env-file .env.managed up -d --bui
 ```
 
 ### วิธีรันเฉพาะของคุณ (Sim Sensor + MS2 แบบไม่ Local)
-กรณีต้องการให้ simulator ส่งจริงเข้า MQTT แล้วให้ MS2 ingest
+กรณีต้องการให้ simulator ส่งจริงเข้า MQTT แล้วให้ MS2 ingest ข้อมูลลง Redis และ InfluxDB
+โดยทดสอบระบบนี้ **ไม่ต้อง** กังวลเรื่อง Database ของ MS1-Auth เพราะได้ตั้งค่าให้ MS2 ข้ามการเช็คสถานะฐานข้อมูลของ MS1 ชั่วคราว (Resilient Startup) แล้ว
+
+ให้ใช้คำสั่งนี้รันได้เลย:
 ```powershell
-docker compose -f docker-compose.managed.yml --env-file .env.managed --profile simulator up -d --build ms1-auth ms2-ingestor sim-sensor
+docker compose -f docker-compose.managed.yml --env-file env.managed --profile simulator up -d --build ms2-ingestor sim-sensor
 ```
 
-กรณีไม่ใช้ simulator (รอข้อมูลจาก sensor/broker จริง)
+กรณีไม่ใช้ simulator (รอรับข้อมูลจาก sensor หรือ broker จริงผ่าน MQTT)
 ```powershell
-docker compose -f docker-compose.managed.yml --env-file .env.managed up -d --build ms1-auth ms2-ingestor
+docker compose -f docker-compose.managed.yml --env-file env.managed up -d --build ms2-ingestor
 ```
 
-## 4) ถ้าใช้บริการจริงภายนอก: ต้องเตรียมอะไร
+**วิธีเช็คผลว่ามันใช้ได้จริง (MS2 ได้รับข้อมูลจาก Simulator)**:
+เปิดเช็ค Logs ว่าไม่มี Error และเชื่อมต่อ MQTT/Redis/InfluxDB สำเร็จ:
+```powershell
+docker logs omnivigil-sim-sensor-1
+docker logs omnivigil-ms2-ingestor-1
+```
+เช็ค Health Endpoint ของ MS2 ว่า Service ต่างๆ Enabled เรียบร้อย:
+```powershell
+curl http://localhost:8002/health
+```
 
-หลักการ
+## 4) การตั้งค่าไฟล์ Environment (สำหรับ Managed External Services)
+
+ในการรันระบบแบบรันจริง คุณต้องเชื่อมต่อกับฐานข้อมูลภายนอก (Managed Services) เพื่อให้แต่ละ Microservice ทำงานได้อย่างสมบูรณ์
+
+### วิธีการใส่ไฟล์ .env.managed
+1. ให้คัดลอกไฟล์ `env.managed.example` ไปเป็นไฟล์ชื่อ `env.managed` (ตามที่คุณทำไว้)
+2. เปิดไฟล์ `env.managed` ขึ้นมาแล้วนำค่า Connection String หรือ Credential ของจริงไปใส่ให้ครบ
+3. รันระบบโดยอ้างอิงไฟล์นี้ เช่น `docker compose ... --env-file env.managed ...`
+
+### 🚨 รหัสและ Endpoint ที่ยังขาดอยู่ (เพื่อนๆ ต้องเติมก่อนรัน Full System) 🚨
+จากไฟล์ `env.managed` ปัจจุบัน ระบบของ **MS2 (คุณ)** มี MQTT, Redis และ InfluxDB **ครบถ้วนและพร้อมทำงานแล้ว** แต่ยังมีส่วนที่ขาดหายไป ซึ่งเป็นของเพื่อนๆ ในทีมที่ต้องรับผิดชอบนำมาใส่:
+
+1. **`JWT_SECRET`**: คีย์ลับสำหรับสร้างและตรวจสอบ JWT Token ของ MS1-Auth (ต้องเปลี่ยนจาก `REPLACE_WITH_STRONG_JWT_SECRET` เป็นรหัสสุ่มที่คาดเดายาก)
+2. **`POSTGRES_URL_AUTH`**: Connection URL สำหรับฐานข้อมูล PostgreSQL ของ MS1 (Auth DB) ปัจจุบันยังเป็นค่า `YOUR_AUTH_DB_HOST`
+3. **`ALERT_POSTGRES_URL`**: Connection URL สำหรับฐานข้อมูล PostgreSQL ของ MS4 (Alert DB) ปัจจุบันยังเป็นค่า `YOUR_ALERT_DB_HOST`
+4. **`POSTGRES_URL_MAINT`**: Connection URL สำหรับฐานข้อมูล PostgreSQL ของ MS5 (Maintenance DB) ปัจจุบันยังเป็นค่า `YOUR_MAINT_DB_HOST`
+
+หากเพื่อนๆ จะนำระบบไปรันทั้งหมดแบบ **Full Stack ไม่ Local** จะต้องเปลี่ยนรหัสทั้ง 4 ตัวนี้ให้เป็น URL ฐานข้อมูลจริงก่อน ไม่อย่างนั้น MS1, MS4 และ MS5 จะรันไม่ขึ้น
+
+### หลักการเพิ่มเติม
 - แต่ละบริการมี DB ของตัวเองตามความรับผิดชอบ
-- ต้องใช้ credential ของจริงจาก platform ทีม
 - ห้าม hardcode secret ในโค้ด
-
-ตัวอย่างการแยก ownership ของ DB
-- MS1 Auth -> Auth Postgres
-- MS5 Maintenance -> Maintenance Postgres
-- MS4 Alert audit -> Alert Postgres (แยกหรือ shared instance คนละ database/schema)
-- MS2 -> InfluxDB + Redis (ไม่ใช้ Postgres ของตัวเอง)
-- MS3 -> Redis broker/backend และเก็บ job status ใน Redis key-space
+- ตัวอย่างการแยก ownership ของ DB:
+  - MS1 Auth -> Auth Postgres
+  - MS5 Maintenance -> Maintenance Postgres
+  - MS4 Alert audit -> Alert Postgres (แยกหรือ shared instance คนละ database/schema)
+  - MS2 -> InfluxDB + Redis (ไม่ใช้ Postgres ของตัวเอง)
+  - MS3 -> Redis broker/backend และเก็บ job status ใน Redis key-space
 
 ## 5) Security แนวปฏิบัติ (ทีมต้องทำตาม)
 
