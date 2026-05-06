@@ -18,6 +18,8 @@ const API = {
   maintenance: import.meta.env.VITE_MS5_URL || "http://localhost:8005"
 };
 
+const STATIC_ACCESS_TOKEN = import.meta.env.VITE_ACCESS_TOKEN || "";
+
 const POLL_MS = 3000;
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -148,8 +150,25 @@ const buildThreshold = (deviceId, sensorKey) => {
   };
 };
 
-const fetchJson = async (url, options) => {
-  const response = await fetch(url, options);
+const getAccessToken = () => {
+  // Runtime override: localStorage token has priority for developer testing.
+  return window.localStorage.getItem("omnivigil_access_token") || STATIC_ACCESS_TOKEN;
+};
+
+const fetchJson = async (url, options = {}) => {
+  const token = getAccessToken();
+  const headers = {
+    ...(options.headers || {})
+  };
+
+  if (token && !headers.Authorization) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers
+  });
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
@@ -302,7 +321,7 @@ export default function App() {
         : `[${time}] Waiting machine telemetry`,
       latestAlert
         ? `[${time}] Alert dispatched: ${latestAlert.risk_level} ${latestAlert.machine_id}`
-        : `[${time}] Alert dispatch queued via RabbitMQ`
+        : `[${time}] Alert dispatch queued via internal API/event flow`
     ];
   }, [latestAlert, selectedMachine]);
 
@@ -376,22 +395,6 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  const simulateFail = async () => {
-    const machineId = selectedMachine || "mix-pump-101";
-    await fetchJson(`${API.ingestor}/simulate/fail?device_id=${machineId}`, { method: "POST" }).catch(() => null);
-    poll();
-  };
-
-  const simulateBatch = async () => {
-    const machineId = selectedMachine || "mix-pump-101";
-    await fetchJson(`${API.ingestor}/simulate/batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_id: machineId, count: 30 })
-    }).catch(() => null);
-    poll();
-  };
-
   return (
     <div className={`app ${riskLevel === "critical" ? "critical" : ""}`}>
       <Sidebar
@@ -403,7 +406,7 @@ export default function App() {
         onToggleSound={() => setSoundOn((value) => !value)}
       />
       <main className="main">
-        <Topbar onSimulateBatch={simulateBatch} onSimulateFail={simulateFail} />
+        <Topbar />
         <section className="grid">
           <ScoreCard healthScore={healthScore} riskLevel={riskLevel} />
           <ServiceGrid serviceStatus={serviceStatus} services={services} />
