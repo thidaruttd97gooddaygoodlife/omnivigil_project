@@ -1,11 +1,44 @@
 from __future__ import annotations
 
+"""
+Sim Sensor Service
+==================
+
+Generates synthetic industrial telemetry and publishes it to MQTT.
+
+Behavior summary:
+- Runs an infinite loop with randomized interval in 1-5 seconds (default).
+- Simulates up to 9 sensor dimensions per machine profile.
+- Uses Gaussian noise to mimic natural sensor variance.
+- Intentionally injects outliers to validate downstream cleaning/clamping.
+- Publishes JSON packets via MQTT QoS 1 to support at-least-once delivery.
+
+Preferred packet contract:
+{
+    "device_id": "pump-01",
+    "ts": "...",
+    "metrics": { ... sensor fields ... }
+}
+"""
+
+# -- Configuration ---------------------------------------------------------
+# These values are read from environment variables so the simulator can run
+# in different deployment modes without code changes.
+#
+# - MQTT settings: where to publish telemetry.
+# - INTERVAL_OPTIONS_SEC: choose send interval options.
+# - BASE_ANOMALY_RATE: chance of a synthetic anomaly on each sample.
+# - MACHINE_COUNT: number of active device profiles to simulate.
+# - NETWORK_DROP_RATE: simulate temporary broker/network outages.
+# - MANUAL_TRIGGER_FILE: external file trigger for manual anomaly injection.
+
 import json
 import math
 import os
 import queue
 import random
 import threading
+import ssl
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,8 +50,10 @@ from app.machine_profiles import CORE_MACHINE_PROFILES, MachineProfile
 BROKER = os.getenv("MQTT_BROKER", "localhost")
 PORT = int(os.getenv("MQTT_PORT", "1883"))
 TOPIC = os.getenv("MQTT_TOPIC", "omnivigil/telemetry")
+MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 INTERVAL_MS = int(os.getenv("INTERVAL_MS", "5000"))
-INTERVAL_OPTIONS_SEC_RAW = os.getenv("INTERVAL_OPTIONS_SEC", "10,20,30")
+INTERVAL_OPTIONS_SEC_RAW = os.getenv("INTERVAL_OPTIONS_SEC", "1,2,3,4,5")
 BASE_ANOMALY_RATE = float(os.getenv("ANOMALY_RATE", "0.03"))
 
 MACHINE_COUNT = int(os.getenv("MACHINE_COUNT", "5"))
@@ -48,6 +83,7 @@ sent_counter = 0
 
 
 def _parse_interval_options(raw: str) -> list[float]:
+    """Parse comma-separated interval options into positive float seconds."""
     options: list[float] = []
     for item in raw.split(","):
         value = item.strip()
@@ -73,6 +109,7 @@ def now_utc() -> datetime:
 
 
 def create_machine(profile: MachineProfile) -> MachineState:
+    """Create runtime state object from static machine profile."""
     return MachineState(
         profile=profile,
         device_id=profile.device_id,
@@ -83,6 +120,7 @@ def create_machine(profile: MachineProfile) -> MachineState:
 
 
 def select_profiles() -> list[MachineProfile]:
+    """Select machine profiles based on MACHINE_IDS and MACHINE_COUNT settings."""
     profiles = CORE_MACHINE_PROFILES
 
     if MACHINE_IDS:
@@ -96,6 +134,7 @@ def select_profiles() -> list[MachineProfile]:
 
 
 def maybe_trigger_network_outage() -> bool:
+    """Simulate temporary network outage windows for resilience testing."""
     global network_down_until
     now = time.time()
 
@@ -111,10 +150,21 @@ def maybe_trigger_network_outage() -> bool:
 
 
 def build_payload(machine: MachineState, force_spike: bool) -> dict:
+    """Build one telemetry packet.
+
+    This function simulates realistic industrial sensor behavior by combining:
+    - baseline values from the machine profile
+    - sinusoidal oscillation
+    - Gaussian noise
+    - slow drift
+    - occasional forced anomalies or outliers
+
+    The output is always normalized into the expected packet shape used by MS2.
+    """
     phase = machine.step / 14.0
-    temp = machine.base_temp + machine.profile.temp_amp * math.sin(phase) + random.uniform(-0.45, 0.45) + machine.drift
-    vib = machine.base_vib + machine.profile.vib_amp * math.sin(machine.step / 9.0) + random.uniform(-0.1, 0.1)
-    rpm = machine.base_rpm + machine.profile.rpm_amp * math.sin(machine.step / 17.0) + random.uniform(-6.0, 6.0)
+    temp = machine.base_temp + machine.profile.temp_amp * math.sin(phase) + random.gauss(0.0, 0.45) + machine.drift
+    vib = machine.base_vib + machine.profile.vib_amp * math.sin(machine.step / 9.0) + random.gauss(0.0, 0.10)
+    rpm = machine.base_rpm + machine.profile.rpm_amp * math.sin(machine.step / 17.0) + random.gauss(0.0, 6.0)
 
     pressure = None
     flow = None
@@ -124,17 +174,17 @@ def build_payload(machine: MachineState, force_spike: bool) -> dict:
     power_kw = None
 
     if machine.profile.pressure_bar_base is not None:
-        pressure = machine.profile.pressure_bar_base + 0.35 * math.sin(machine.step / 11.0) + random.uniform(-0.08, 0.08)
+        pressure = machine.profile.pressure_bar_base + 0.35 * math.sin(machine.step / 11.0) + random.gauss(0.0, 0.08)
     if machine.profile.flow_lpm_base is not None:
-        flow = machine.profile.flow_lpm_base + 11.0 * math.sin(machine.step / 8.0) + random.uniform(-1.8, 1.8)
+        flow = machine.profile.flow_lpm_base + 11.0 * math.sin(machine.step / 8.0) + random.gauss(0.0, 1.8)
     if machine.profile.current_a_base is not None:
-        current = machine.profile.current_a_base + 2.8 * math.sin(machine.step / 10.0) + random.uniform(-0.5, 0.5)
+        current = machine.profile.current_a_base + 2.8 * math.sin(machine.step / 10.0) + random.gauss(0.0, 0.5)
     if machine.profile.oil_temp_c_base is not None:
-        oil_temp = machine.profile.oil_temp_c_base + 2.4 * math.sin(machine.step / 12.0) + random.uniform(-0.4, 0.4)
+        oil_temp = machine.profile.oil_temp_c_base + 2.4 * math.sin(machine.step / 12.0) + random.gauss(0.0, 0.4)
     if machine.profile.humidity_pct_base is not None:
-        humidity = machine.profile.humidity_pct_base + 3.0 * math.sin(machine.step / 14.0) + random.uniform(-0.6, 0.6)
+        humidity = machine.profile.humidity_pct_base + 3.0 * math.sin(machine.step / 14.0) + random.gauss(0.0, 0.6)
     if machine.profile.power_kw_base is not None:
-        power_kw = machine.profile.power_kw_base + 1.1 * math.sin(machine.step / 9.0) + random.uniform(-0.2, 0.2)
+        power_kw = machine.profile.power_kw_base + 1.1 * math.sin(machine.step / 9.0) + random.gauss(0.0, 0.2)
 
     auto_anomaly = random.random() < BASE_ANOMALY_RATE
     if auto_anomaly or force_spike:
@@ -152,37 +202,55 @@ def build_payload(machine: MachineState, force_spike: bool) -> dict:
         if power_kw is not None:
             power_kw += random.uniform(1.5, 3.2)
 
+        # Inject one explicit outlier field so downstream clean/clamp logic is always exercised.
+        outlier_field = random.choice(["temperature_c", "vibration_rms", "rpm", "pressure_bar", "current_a"])
+        if outlier_field == "temperature_c":
+            temp = random.uniform(220.0, 500.0)
+        elif outlier_field == "vibration_rms":
+            vib = random.uniform(70.0, 120.0)
+        elif outlier_field == "rpm":
+            rpm = random.uniform(25000.0, 40000.0)
+        elif outlier_field == "pressure_bar" and pressure is not None:
+            pressure = random.uniform(40.0, 80.0)
+        elif outlier_field == "current_a" and current is not None:
+            current = random.uniform(1800.0, 3000.0)
+
     machine.drift = min(machine.drift + 0.0035, 16.0)
     machine.step += 1
 
-    payload = {
-        "device_id": machine.device_id,
-        "machine_type": machine.profile.machine_type,
-        "line": machine.profile.line,
-        "zone": machine.profile.zone,
-        "timestamp": now_utc().isoformat(),
+    metrics = {
         "temperature_c": round(temp, 2),
         "vibration_rms": round(max(0.1, vib), 3),
         "rpm": round(max(0.0, rpm), 1),
     }
 
     if pressure is not None:
-        payload["pressure_bar"] = round(max(0.0, pressure), 3)
+        metrics["pressure_bar"] = round(max(0.0, pressure), 3)
     if flow is not None:
-        payload["flow_lpm"] = round(max(0.0, flow), 2)
+        metrics["flow_lpm"] = round(max(0.0, flow), 2)
     if current is not None:
-        payload["current_a"] = round(max(0.0, current), 3)
+        metrics["current_a"] = round(max(0.0, current), 3)
     if oil_temp is not None:
-        payload["oil_temp_c"] = round(max(0.0, oil_temp), 2)
+        metrics["oil_temp_c"] = round(max(0.0, oil_temp), 2)
     if humidity is not None:
-        payload["humidity_pct"] = round(min(100.0, max(0.0, humidity)), 2)
+        metrics["humidity_pct"] = round(min(100.0, max(0.0, humidity)), 2)
     if power_kw is not None:
-        payload["power_kw"] = round(max(0.0, power_kw), 3)
+        metrics["power_kw"] = round(max(0.0, power_kw), 3)
+
+    payload = {
+        "device_id": machine.device_id,
+        "machine_type": machine.profile.machine_type,
+        "line": machine.profile.line,
+        "zone": machine.profile.zone,
+        "ts": now_utc().isoformat(),
+        "metrics": metrics,
+    }
 
     return payload
 
 
 def start_manual_command_listener() -> None:
+    """Start stdin command listener for manual anomaly injection commands."""
     def _listen() -> None:
         print("[sim] commands: spike <device-id|all>")
         while True:
@@ -207,6 +275,7 @@ def start_manual_command_listener() -> None:
 
 
 def consume_file_trigger() -> str | None:
+    """Read and consume one-shot anomaly trigger from a file if present."""
     if not MANUAL_TRIGGER_FILE:
         return None
     if not os.path.exists(MANUAL_TRIGGER_FILE):
@@ -223,6 +292,7 @@ def consume_file_trigger() -> str | None:
 
 
 def pick_spike_targets(machines: list[MachineState]) -> set[str]:
+    """Resolve which machine IDs should receive forced anomaly spikes this cycle."""
     targets: set[str] = set()
 
     file_trigger = consume_file_trigger()
@@ -241,6 +311,7 @@ def pick_spike_targets(machines: list[MachineState]) -> set[str]:
 
 
 def main() -> None:
+    """Entrypoint: connect MQTT and continuously publish machine telemetry."""
     global sent_counter
 
     selected_profiles = select_profiles()
@@ -251,10 +322,21 @@ def main() -> None:
     for machine in machines:
         print(f"  - {machine.device_id} ({machine.profile.machine_type}, line={machine.profile.line}, zone={machine.profile.zone})")
 
-    client = mqtt.Client(client_id=f"sim-sensor-{random.randint(100, 999)}")
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"sim-sensor-{random.randint(100, 999)}"
+    )
+    if MQTT_USERNAME and MQTT_PASSWORD:
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+        
+    if PORT == 8883 or str(os.getenv("MQTT_USE_TLS", "")).lower() in ["true", "1", "yes"]:
+        client.tls_set(tls_version=ssl.PROTOCOL_TLS)
+        
     client.connect(BROKER, PORT, 60)
     client.loop_start()
 
+    # Start a background keyboard listener so operator can manually force
+    # an anomaly with "spike <device-id>" or "spike all".
     start_manual_command_listener()
 
     while True:
