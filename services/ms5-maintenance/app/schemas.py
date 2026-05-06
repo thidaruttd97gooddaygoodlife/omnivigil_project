@@ -2,14 +2,14 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
-# สำหรับรับ request จาก MS3 (POST /work-orders)
+# Incoming create payload (API or event-driven creation path)
 class WorkOrderCreate(BaseModel):
     machine_id: str
     issue: str
     priority: str = "medium"
     source_alert_id: Optional[str] = None
 
-# สำหรับตอบ response กลับไป
+# Standard work order response
 class WorkOrderResponse(BaseModel):
     work_order_id: int
     machine_id: str
@@ -20,6 +20,6 @@ class WorkOrderResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-# สำหรับรับข้อมูลตอนช่างกด "ซ่อมเสร็จ"
+# Completion payload when technician marks work as done
 class CompleteRequest(BaseModel):
-    action_taken: str   # ช่างเขียนว่าทำอะไรไป
+    action_taken: str

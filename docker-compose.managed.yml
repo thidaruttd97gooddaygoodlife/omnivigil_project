@@ -1,0 +1,138 @@
+services:
+  ms1-auth:
+    build:
+      context: ./services/ms1-auth
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      POSTGRES_URL: ${POSTGRES_URL_AUTH}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-120}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 20s
+
+  ms2-ingestor:
+    build:
+      context: ./services/ms2-ingestor
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      INFLUXDB_URL: ${INFLUXDB_URL}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+      AI_ENGINE_URL: ${AI_ENGINE_URL:-http://ms3-ai-engine:8003}
+      MS1_AUTH_URL: ${MS1_AUTH_URL:-http://ms1-auth:8001}
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY}
+      MQTT_BROKER: ${MQTT_BROKER}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-omnivigil/telemetry}
+      MQTT_QOS: ${MQTT_QOS:-1}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_TELEMETRY_PREFIX: telemetry:device
+      REDIS_MAX_POINTS_PER_DEVICE: 5000
+      MAX_IN_MEMORY_READINGS: 5000
+      MAX_PENDING_INFLUX_WRITES: 10000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      ms1-auth:
+        condition: service_started
+
+  ms3-ai-engine:
+    build:
+      context: ./services/ms3-ai-engine
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      REDIS_URL: ${REDIS_URL}
+      REDIS_EVENT_CHANNEL: ${REDIS_EVENT_CHANNEL:-anomaly_detected}
+      MS3_JOB_PREFIX: ${MS3_JOB_PREFIX:-ms3:job}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+
+  ms3-worker:
+    build:
+      context: ./services/ms3-ai-engine
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${REDIS_URL}
+      REDIS_EVENT_CHANNEL: ${REDIS_EVENT_CHANNEL:-anomaly_detected}
+      MS3_JOB_PREFIX: ${MS3_JOB_PREFIX:-ms3:job}
+
+  ms4-alert:
+    build:
+      context: ./services/ms4-alert
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    environment:
+      ALERT_POSTGRES_URL: ${ALERT_POSTGRES_URL}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_EVENT_CHANNEL: ${REDIS_EVENT_CHANNEL:-anomaly_detected}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+
+  ms5-maintenance:
+    build:
+      context: ./services/ms5-maintenance
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    environment:
+      POSTGRES_URL: ${POSTGRES_URL_MAINT}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_EVENT_CHANNEL: ${REDIS_EVENT_CHANNEL:-anomaly_detected}
+      AUTO_CREATE_THRESHOLD: 0.9
+      MS1_AUTH_URL: ${MS1_AUTH_URL:-http://ms1-auth:8001}
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      ms1-auth:
+        condition: service_started
+
+  sim-sensor:
+    build:
+      context: ./services/sim-sensor
+    profiles: ["simulator"]
+    restart: unless-stopped
+    environment:
+      MQTT_BROKER: ${MQTT_BROKER}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-omnivigil/telemetry}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+      INTERVAL_OPTIONS_SEC: ${INTERVAL_OPTIONS_SEC:-1,2,3,4,5}
+      ANOMALY_RATE: ${ANOMALY_RATE:-0.04}
+      MACHINE_COUNT: ${MACHINE_COUNT:-5}
+      NETWORK_DROP_RATE: ${NETWORK_DROP_RATE:-0.03}
+      NETWORK_DROP_DURATION_SEC: ${NETWORK_DROP_DURATION_SEC:-8}
+      MANUAL_TRIGGER_FILE: ${MANUAL_TRIGGER_FILE:-/tmp/force_anomaly}

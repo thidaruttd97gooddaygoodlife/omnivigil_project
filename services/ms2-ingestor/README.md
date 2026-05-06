@@ -1,11 +1,15 @@
 # MS2 IoT Ingestor
 
-MS2 รับข้อมูลจาก MQTT, ทำความสะอาดข้อมูล, และบันทึกลง InfluxDB เพื่อให้ทีม AI (MS3) ดึงไปใช้ต่อได้ทันที
+MS2 รับข้อมูลจาก MQTT, ทำความสะอาดข้อมูล, และทำ Dual-Write ไป InfluxDB + Redis เพื่อให้ทีม AI (MS3) และ Frontend ใช้งานต่อได้ทันที
 
 ## Responsibilities
 - Subscribe MQTT topic: `omnivigil/telemetry`
-- Validate + clean payload (`temperature_c`, `vibration_rms`, `rpm`, `pressure_bar`, `flow_lpm`, `current_a`, `oil_temp_c`, `humidity_pct`, `power_kw`)
-- Write to InfluxDB measurement: `telemetry`
+- รัน background ingest worker + internal queue เพื่อแยก MQTT callback ออกจากการประมวลผล
+- รองรับ payload ทั้งแบบ flat เดิม และแบบ `{device_id, ts, metrics:{...}}`
+- Validation ความครบของ metrics (missing > 30% จะ reject)
+- Clean/Clamp ค่าตาม guardrails เพื่อกัน outlier ทำกราฟเพี้ยน
+- Write to InfluxDB measurement: `telemetry` (batched writes)
+- Write to Redis list ต่อ device (`RPUSH` + `LTRIM -5000 -1`) สำหรับ hot path
 - Buffer pending writes ถ้า InfluxDB ล่มชั่วคราว
 
 ## Endpoints
@@ -15,9 +19,7 @@ MS2 รับข้อมูลจาก MQTT, ทำความสะอาด
 - `GET /quality/readings` : quality score + flags ต่อ reading สำหรับงาน AI/Data Engineer
 - `POST /ingest` : ingest แบบ HTTP
 - `POST /ingest/analyze` : ingest และลองเรียก AI engine (optional)
-- `POST /simulate/batch` : ยิงข้อมูลชุดทดสอบเข้า MS2 โดยตรง
-- `POST /simulate/fail` : สร้างค่า critical จุดเดียวเพื่อ demo
-- `GET /readings` : ดูข้อมูลล่าสุดใน memory
+- `GET /readings` : ดูข้อมูลล่าสุดจาก Redis (fallback เป็น memory)
 
 ## Required ENV
 - `MQTT_BROKER` (default `localhost`)
@@ -28,12 +30,25 @@ MS2 รับข้อมูลจาก MQTT, ทำความสะอาด
 - `INFLUXDB_TOKEN`
 - `INFLUXDB_ORG`
 - `INFLUXDB_BUCKET`
+- `REDIS_URL`
 
 ## Optional ENV
-- `AI_ENGINE_URL` (ใช้กับ `/ingest/analyze` และ `/simulate/fail`)
+- `AI_ENGINE_URL` (ใช้กับ `/ingest/analyze`)
+- `MS1_AUTH_URL` (default `http://localhost:8001` สำหรับ verify JWT)
+- `INTERNAL_SERVICE_KEY` (optional key สำหรับ internal service bypass)
 - `MAX_IN_MEMORY_READINGS` (default `5000`)
 - `MAX_PENDING_INFLUX_WRITES` (default `10000`)
+- `REDIS_TELEMETRY_PREFIX` (default `telemetry:device`)
+- `REDIS_MAX_POINTS_PER_DEVICE` (default `5000`)
+- `ANALYZE_WINDOW_SIZE` (default `70`)
+- `MQTT_BUFFER_SIZE` (default `20000`)
+- `INFLUXDB_BATCH_SIZE` (default `200`)
+- `INFLUXDB_FLUSH_INTERVAL_MS` (default `1500`)
 - `LOG_LEVEL` (default `INFO`)
+
+## Security
+- Frontend-facing endpoints require bearer JWT verified by MS1 (`/auth/verify`).
+- Internal calls can use header `X-Internal-Key` when `INTERNAL_SERVICE_KEY` is configured.
 
 ## Run with Docker Compose
 จาก root project:
@@ -96,6 +111,7 @@ curl http://localhost:8002/stats
 - `mqtt_messages_total`
 - `stored_total`
 - `influx_write_success_total`
+- `redis_write_success_total`
 
 4. ตรวจ baseline/reference ของ sensor:
 
@@ -117,3 +133,18 @@ curl "http://localhost:8002/quality/readings?limit=20"
 - tags: `device_id`, `machine_type`, `line`, `zone`
 - quality fields ใน Influx: `quality_score`, `quality_warning_count`, `quality_critical_count`, `quality_jump_count`
 - quality API: `GET /quality/reference` และ `GET /quality/readings`
+
+## Data Contract (แนะนำ)
+แพ็กเก็ตมาตรฐานจาก simulator:
+
+```json
+{
+	"device_id": "pump-01",
+	"ts": "2026-04-29T10:00:00Z",
+	"metrics": {
+		"temperature_c": 85.0,
+		"vibration_rms": 2.1,
+		"rpm": 1490.0
+	}
+}
+```
