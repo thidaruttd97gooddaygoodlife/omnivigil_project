@@ -12,9 +12,9 @@ class WorkOrder(Base):
     machine_id    = Column(String(100), nullable=False, index=True)
     issue         = Column(Text, nullable=False)
     priority      = Column(String(20), default="medium")   # low | medium | high | critical
-    status        = Column(String(20), default="open")     # open | in_progress | completed
-    source_alert_id = Column(String(100), nullable=True)   # alert_id จาก MS4
-    action_taken  = Column(Text, nullable=True)            # ช่างกรอกตอนซ่อมเสร็จ
+    status        = Column(String(20), default="pending")  # pending | in_progress | completed
+    source_alert_id = Column(String(100), nullable=True)   # Alert ID propagated from MS4
+    action_taken  = Column(Text, nullable=True)            # Maintenance action filled by engineer on completion
     created_at    = Column(DateTime(timezone=True), default=now_utc)
     accepted_at   = Column(DateTime(timezone=True), nullable=True)
     completed_at  = Column(DateTime(timezone=True), nullable=True)
