@@ -35,6 +35,8 @@ services:
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_TOPIC: ${MQTT_TOPIC:-omnivigil/telemetry}
       MQTT_QOS: ${MQTT_QOS:-1}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
       REDIS_URL: ${REDIS_URL}
       REDIS_TELEMETRY_PREFIX: telemetry:device
       REDIS_MAX_POINTS_PER_DEVICE: 5000
@@ -48,7 +50,7 @@ services:
       start_period: 15s
     depends_on:
       ms1-auth:
-        condition: service_healthy
+        condition: service_started
 
   ms3-ai-engine:
     build:
@@ -115,7 +117,7 @@ services:
       start_period: 15s
     depends_on:
       ms1-auth:
-        condition: service_healthy
+        condition: service_started
 
   sim-sensor:
     build:
@@ -126,6 +128,8 @@ services:
       MQTT_BROKER: ${MQTT_BROKER}
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_TOPIC: ${MQTT_TOPIC:-omnivigil/telemetry}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
       INTERVAL_OPTIONS_SEC: ${INTERVAL_OPTIONS_SEC:-1,2,3,4,5}
       ANOMALY_RATE: ${ANOMALY_RATE:-0.04}
       MACHINE_COUNT: ${MACHINE_COUNT:-5}
