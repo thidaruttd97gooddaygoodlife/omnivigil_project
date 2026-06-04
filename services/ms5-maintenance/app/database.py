@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 raw_url = os.getenv(
     "POSTGRES_URL",
-    "postgresql://omni:omni_password@localhost:5432/maintenance"
+    "postgresql://omni:omni_password@localhost:5435/maintenance"
 )
 DATABASE_URL = raw_url.replace("postgres://", "postgresql://", 1)
 

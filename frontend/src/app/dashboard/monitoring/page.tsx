@@ -2,22 +2,43 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { mockMachines, generateSensorData, SensorReading } from '@/lib/mockData';
-import { ingestorApi, machineApi } from '@/lib/api';
-import { Activity, Thermometer, BarChart3, Gauge, RefreshCw } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { mockMachines, generateSensorData, Machine, SensorReading } from '@/lib/mockData';
+import { aiApi, ingestorApi, machineApi } from '@/lib/api';
+import { Activity, Thermometer, BarChart3, Gauge, RefreshCw, AlertTriangle } from 'lucide-react';
+import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 import { SensorGuide } from '@/components/SensorGuide';
+
+type AiEvent = {
+    event_id: string | number;
+    device_id: string;
+    risk_level: 'low' | 'medium' | 'high' | 'critical';
+    anomaly_score: number;
+    alert_id?: string | null;
+    work_order_id?: string | null;
+    timestamp: string;
+};
+
+type HistoryReading = {
+    timestamp: string;
+    temperature_c: number;
+    vibration_rms: number;
+    pressure_bar?: number | null;
+    rpm?: number | null;
+};
+
+type MachineStatus = Machine['status'];
 
 export default function MonitoringPage() {
     const { hasAccess, isDemoMode } = useAuth();
-    const [machines, setMachines] = useState<any[]>([]);
+    const [machines, setMachines] = useState<Machine[]>([]);
     const [selectedMachine, setSelectedMachine] = useState('');
     const [sensorData, setSensorData] = useState<SensorReading[]>([]);
+    const [aiEvents, setAiEvents] = useState<AiEvent[]>([]);
     const [isLive, setIsLive] = useState(true);
 
     useEffect(() => {
         const fetchMachines = async () => {
-            if (isDemoMode) {
+            if (!isDemoMode) {
                 setMachines(mockMachines);
                 if (mockMachines.length > 0) setSelectedMachine(mockMachines[0].id);
                 return;
@@ -31,6 +52,20 @@ export default function MonitoringPage() {
             }
         };
         fetchMachines();
+    }, [isDemoMode]);
+
+    const loadAiEvents = useCallback(async () => {
+        if (isDemoMode) {
+            setAiEvents([]);
+            return;
+        }
+
+        try {
+            const res = await aiApi.get('/event?limit=100');
+            setAiEvents(res.data.items || []);
+        } catch (err) {
+            console.error('Failed to fetch MS3 AI events', err);
+        }
     }, [isDemoMode]);
 
     const loadData = useCallback(async () => {
@@ -65,7 +100,7 @@ export default function MonitoringPage() {
             const res = await ingestorApi.get(`/history/${selectedMachine}?days=1`);
             const data = res.data;
             
-            const machineData = data.map((d: any) => ({
+            const machineData = data.map((d: HistoryReading) => ({
                 timestamp: d.timestamp,
                 machineId: selectedMachine,
                 temperature: d.temperature_c,
@@ -78,24 +113,38 @@ export default function MonitoringPage() {
         } catch (err) {
             console.error('Failed to load live sensor data', err);
         }
-    }, [selectedMachine, isDemoMode]);
+    }, [selectedMachine, isDemoMode, machines]);
 
-    useEffect(() => { loadData(); }, [loadData]);
+    useEffect(() => {
+        const timeout = window.setTimeout(() => {
+            void loadData();
+            void loadAiEvents();
+        }, 0);
+        return () => window.clearTimeout(timeout);
+    }, [loadData, loadAiEvents]);
 
     useEffect(() => {
         if (!isLive) return;
         const interval = setInterval(() => {
             loadData();
+            loadAiEvents();
         }, 3000); // Polling every 3s since API isn't WebSockets
         return () => clearInterval(interval);
-    }, [isLive, loadData]);
+    }, [isLive, loadData, loadAiEvents]);
 
     if (!hasAccess('monitoring')) {
         return <div className="no-access"><h2>🔒 Access Denied</h2><p>You do not have permission to view this page.</p></div>;
     }
 
-    const machine = machines.find(m => m.id === selectedMachine);
     const latest = sensorData[sensorData.length - 1];
+    const latestAiEventByMachine = aiEvents.reduce<Map<string, AiEvent>>((latestEvents, event) => {
+        const current = latestEvents.get(event.device_id);
+        if (!current || new Date(event.timestamp).getTime() > new Date(current.timestamp).getTime()) {
+            latestEvents.set(event.device_id, event);
+        }
+        return latestEvents;
+    }, new Map());
+    const selectedAiEvent = selectedMachine ? latestAiEventByMachine.get(selectedMachine) : undefined;
     const chartData = sensorData.slice(-30).map(d => ({
         time: new Date(d.timestamp).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }),
         temperature: d.temperature,
@@ -110,8 +159,14 @@ export default function MonitoringPage() {
         critical: 'var(--status-critical)',
         offline: 'var(--status-offline)',
     };
+    const riskColors: Record<AiEvent['risk_level'], string> = {
+        low: 'var(--status-normal)',
+        medium: 'var(--status-warning)',
+        high: '#f97316',
+        critical: 'var(--status-critical)',
+    };
 
-    const machinesByStatus = {
+    const machinesByStatus: Record<MachineStatus, number> = {
         normal: machines.filter(m => m.status === 'normal').length,
         warning: machines.filter(m => m.status === 'warning').length,
         critical: machines.filter(m => m.status === 'critical').length,
@@ -153,7 +208,9 @@ export default function MonitoringPage() {
                     Select Machine
                 </h3>
                 <div className="grid-4">
-                    {machines.map(m => (
+                    {machines.map(m => {
+                        const aiEvent = latestAiEventByMachine.get(m.id);
+                        return (
                         <div
                             key={m.id}
                             className="glass-card"
@@ -171,10 +228,41 @@ export default function MonitoringPage() {
                             </div>
                             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{m.type}</div>
                             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{m.location}</div>
+                            {aiEvent && (
+                                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(148, 163, 184, 0.16)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.76rem', color: riskColors[aiEvent.risk_level], fontWeight: 600 }}>
+                                        <AlertTriangle size={13} />
+                                        AI {aiEvent.risk_level.toUpperCase()} · {(aiEvent.anomaly_score * 100).toFixed(0)}%
+                                    </div>
+                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                                        {new Date(aiEvent.timestamp).toLocaleString('th-TH')}
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
+
+            {selectedAiEvent && (
+                <div className="glass-card" style={{ padding: '16px 20px', marginBottom: '24px', border: `1px solid ${riskColors[selectedAiEvent.risk_level]}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                        <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: riskColors[selectedAiEvent.risk_level] }}>
+                                <AlertTriangle size={16} />
+                                Latest AI Event: {selectedAiEvent.risk_level.toUpperCase()}
+                            </div>
+                            <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '6px' }}>
+                                Score {(selectedAiEvent.anomaly_score * 100).toFixed(0)}% · {new Date(selectedAiEvent.timestamp).toLocaleString('th-TH')}
+                            </div>
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Alert: {selectedAiEvent.alert_id || 'None'} · WO: {selectedAiEvent.work_order_id || 'None'}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Live Sensor Readings */}
             {latest && (

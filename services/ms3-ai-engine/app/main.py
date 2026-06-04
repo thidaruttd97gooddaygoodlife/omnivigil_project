@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.database import engine, Base, get_db
 from app.models import Event
 from app.celery_app import celery_app
-from app.sensors import ALL_SENSORS
+from app.sensors import ALL_SENSORS, score_sensor_value
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -348,7 +348,7 @@ def _get_predict_pipeline_status() -> dict:
         return dict(_pipeline_status)
 
 
-def _score(reading: TelemetryReading) -> float:
+def _legacy_score_unused(reading: TelemetryReading) -> float:
     """
     Fast threshold-based score for the CURRENT reading (no ML).
     Used for immediate alerting while ML inference runs asynchronously.
@@ -368,6 +368,15 @@ def _score(reading: TelemetryReading) -> float:
         score += max(0.0, (reading.power_kw - 15.0) / 5.0)
     # Normalise (6 sensors contributing → divide by 6)
     return max(0.0, min(1.0, score / 10.0))
+
+
+def _score(reading: TelemetryReading) -> float:
+    scores = []
+    for sensor_name in ALL_SENSORS:
+        value = getattr(reading, sensor_name, None)
+        if value is not None:
+            scores.append(score_sensor_value(float(value), sensor_name))
+    return round(max(scores, default=0.0), 4)
 
 
 def _risk_level(score: float) -> str:
@@ -772,6 +781,7 @@ async def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)) -> Ana
     return response
 
 
+@app.get("/event")
 @app.get("/events")
 def events(limit: int = 50, db: Session = Depends(get_db)) -> dict:
     db_events = db.query(Event).order_by(Event.timestamp.desc()).limit(limit).all()

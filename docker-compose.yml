@@ -73,11 +73,11 @@ services:
     mem_limit: 512m
     cpus: 0.75
 
-  postgres:
+  ms5-maintenance-DB:
     image: postgres:15-alpine
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5435:5432"
     environment:
       POSTGRES_USER: ${MAINT_POSTGRES_USER:-omni}
       POSTGRES_PASSWORD: ${MAINT_POSTGRES_PASSWORD:-omni_password}
@@ -276,7 +276,7 @@ services:
     ports:
       - "8005:8005"
     environment:
-      POSTGRES_URL: postgres://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@postgres:5432/${MAINT_POSTGRES_DB:-maintenance}
+      POSTGRES_URL: postgresql://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@ms5-maintenance-DB:5432/${MAINT_POSTGRES_DB:-maintenance}
       MACHINE_SERVICE_URL: http://ms6-machine:8006
       REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
       JWT_SECRET: ${JWT_SECRET:-omni_dev_secret_change_me}
@@ -290,7 +290,7 @@ services:
     mem_limit: 256m
     cpus: 0.5
     depends_on:
-      postgres:
+      ms5-maintenance-DB:
         condition: service_healthy
       ms6-machine:
         condition: service_healthy

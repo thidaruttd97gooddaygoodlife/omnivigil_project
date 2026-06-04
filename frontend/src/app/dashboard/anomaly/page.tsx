@@ -82,11 +82,20 @@ export default function AnomalyPage() {
     const filtered = filter === 'all' ? anomalies : anomalies.filter(a => a.severity === filter);
     const selected = anomalies.find(a => a.id === selectedAnomaly);
 
-    const severityCounts = {
-        critical: anomalies.filter(a => a.severity === 'critical').length,
-        high: anomalies.filter(a => a.severity === 'high').length,
-        medium: anomalies.filter(a => a.severity === 'medium').length,
-        low: anomalies.filter(a => a.severity === 'low').length,
+    const latestByMachine = anomalies.reduce<Map<string, AnomalyEvent>>((latest, anomaly) => {
+        const current = latest.get(anomaly.machineId);
+        if (!current || new Date(anomaly.timestamp).getTime() > new Date(current.timestamp).getTime()) {
+            latest.set(anomaly.machineId, anomaly);
+        }
+        return latest;
+    }, new Map());
+    const latestMachineStates = Array.from(latestByMachine.values());
+
+    const severityCounts: Record<AnomalyEvent['severity'], number> = {
+        critical: latestMachineStates.filter(a => a.severity === 'critical').length,
+        high: latestMachineStates.filter(a => a.severity === 'high').length,
+        medium: latestMachineStates.filter(a => a.severity === 'medium').length,
+        low: latestMachineStates.filter(a => a.severity === 'low').length,
     };
 
     const severityColors: Record<string, string> = {

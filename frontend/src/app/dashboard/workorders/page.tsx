@@ -79,12 +79,14 @@ export default function WorkOrdersPage() {
     const statusOptionsByState = DEMO_STATUS_TRANSITIONS;
 
     const loadMachines = useCallback(async () => {
-        if (isDemoMode) {
+        if (!isDemoMode) {
             setMachines(mockMachines);
             return;
         }
         try {
             const res = await machineApi.get('/machines');
+            console.log(res);
+            
             setMachines(res.data);
         } catch {
             console.error('Failed to load MS6 machines');
