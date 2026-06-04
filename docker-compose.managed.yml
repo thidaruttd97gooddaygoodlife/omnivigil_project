@@ -72,12 +72,23 @@ services:
   ms3-worker:
     build:
       context: ./services/ms3-ai-engine
+      args:
+        INSTALL_ML: ${MS3_INSTALL_ML:-true}
+        TORCH_INDEX_URL: ${MS3_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     restart: unless-stopped
     environment:
       REDIS_URL: ${REDIS_URL}
       REDIS_EVENT_CHANNEL: ${REDIS_EVENT_CHANNEL:-anomaly_detected}
       MS3_JOB_PREFIX: ${MS3_JOB_PREFIX:-ms3:job}
+      CHRONOS_DEVICE: ${CHRONOS_DEVICE:-cuda}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   ms4-alert:
     build:
@@ -89,6 +100,9 @@ services:
       ALERT_POSTGRES_URL: ${ALERT_POSTGRES_URL}
       REDIS_URL: ${REDIS_URL}
       REDIS_EVENT_CHANNEL: ${REDIS_EVENT_CHANNEL:-anomaly_detected}
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET}
+      LINE_TARGET_USER_ID: ${LINE_TARGET_USER_ID}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
       interval: 10s

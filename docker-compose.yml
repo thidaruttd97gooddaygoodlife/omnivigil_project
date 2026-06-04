@@ -213,7 +213,7 @@ services:
       context: ./services/ms3-ai-engine
       args:
         INSTALL_ML: ${MS3_INSTALL_ML:-true}
-        TORCH_INDEX_URL: ${MS3_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        TORCH_INDEX_URL: ${MS3_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     restart: unless-stopped
     environment:
@@ -224,7 +224,7 @@ services:
       AI_WORKER_TASK_TIME_LIMIT_SECONDS: ${AI_WORKER_TASK_TIME_LIMIT_SECONDS:-900}
       AI_PREDICT_STREAM: ${AI_PREDICT_STREAM:-ms3:predict:events}
       CHRONOS_MODEL_ID: ${CHRONOS_MODEL_ID:-Stalemartyr/chronos-finetuned}
-      CHRONOS_DEVICE: ${CHRONOS_DEVICE:-auto}
+      CHRONOS_DEVICE: ${CHRONOS_DEVICE:-cuda}
       HF_HOME: /cache/huggingface
     volumes:
       - hf_cache_data:/cache/huggingface
@@ -235,7 +235,13 @@ services:
         condition: service_healthy
       ms3-ai-DB:
         condition: service_healthy
-
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
   ms4-alert:
     build:
       context: ./services/ms4-alert
@@ -244,6 +250,9 @@ services:
       - "8004:8004"
     environment:
       RABBITMQ_URL: amqp://rabbitmq:5672
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET}
+      LINE_TARGET_USER_ID: ${LINE_TARGET_USER_ID}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
       interval: 10s
