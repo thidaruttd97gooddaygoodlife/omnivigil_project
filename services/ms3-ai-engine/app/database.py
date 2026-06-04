@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-SQLALCHEMY_DATABASE_URL = os.getenv("POSTGRES_URL", "postgresql://omni:omni_password@postgres-ai:5432/ai_engine")
+SQLALCHEMY_DATABASE_URL = os.getenv("POSTGRES_URL", "postgresql://omni:omni_password@ms3-ai-DB:5432/ai_engine")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,

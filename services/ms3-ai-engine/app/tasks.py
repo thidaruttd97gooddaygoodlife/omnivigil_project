@@ -106,7 +106,7 @@ def run_inference_sensor(
     """
     id_col = "device_id"
     ts_col = "timestamp"
-    prediction_length = 5    # forecast next 5 steps as required by orchestration design
+    prediction_length = 24   # forecast steps (e.g. 24 × 10 s = 4 minutes ahead)
 
     _zero = {
         "device_id": device_id,
