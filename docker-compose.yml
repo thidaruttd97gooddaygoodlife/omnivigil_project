@@ -186,6 +186,11 @@ services:
       POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
       AI_ENABLE_WORKER_INFERENCE: ${AI_ENABLE_WORKER_INFERENCE:-true}
       AI_WORKER_RESULT_TIMEOUT_SECONDS: ${AI_WORKER_RESULT_TIMEOUT_SECONDS:-300}
+      MS2_INGESTOR_URL: http://ms2-ingestor:8002
+      AI_PREDICT_STREAM: ${AI_PREDICT_STREAM:-ms3:predict:events}
+      AI_PIPELINE_AUTO_START: ${AI_PIPELINE_AUTO_START:-true}
+      AI_PIPELINE_INTERVAL_SECONDS: ${AI_PIPELINE_INTERVAL_SECONDS:-30}
+      AI_PIPELINE_MS2_READINGS_LIMIT: ${AI_PIPELINE_MS2_READINGS_LIMIT:-500}
       REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
@@ -217,6 +222,7 @@ services:
       MAINTENANCE_URL: http://ms5-maintenance:8005
       POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
       AI_WORKER_TASK_TIME_LIMIT_SECONDS: ${AI_WORKER_TASK_TIME_LIMIT_SECONDS:-900}
+      AI_PREDICT_STREAM: ${AI_PREDICT_STREAM:-ms3:predict:events}
       CHRONOS_MODEL_ID: ${CHRONOS_MODEL_ID:-Stalemartyr/chronos-finetuned}
       CHRONOS_DEVICE: ${CHRONOS_DEVICE:-auto}
       HF_HOME: /cache/huggingface

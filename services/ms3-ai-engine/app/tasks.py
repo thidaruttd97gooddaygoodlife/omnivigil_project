@@ -22,11 +22,17 @@ NOTE: ms3-worker runs with --concurrency=1 by default.
 
 import os
 import logging
+import json
 from typing import List, Dict
 import pandas as pd
 from datetime import datetime, timezone
 from app.celery_app import celery_app
 from app.sensors import ALL_SENSORS as SENSOR_NAMES, score_sensor_value
+
+try:
+    import redis
+except ImportError:  # pragma: no cover - dependency is present in the service image
+    redis = None
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +53,48 @@ SENSOR_THRESHOLDS: Dict[str, Dict[str, float]] = {}
 
 # ── Chronos model (lazy-loaded once per worker process) ──────────────────────
 _pipeline = None
+_redis_client = None
+
+
+def _risk_level(score: float) -> str:
+    if score >= 0.75:
+        return "critical"
+    if score >= 0.50:
+        return "high"
+    if score >= 0.30:
+        return "medium"
+    return "low"
+
+
+def _get_redis_client():
+    global _redis_client
+    if redis is None:
+        raise RuntimeError("redis package is not installed")
+    if _redis_client is None:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        _redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    return _redis_client
+
+
+def _publish_device_prediction_event(payload: dict) -> str | None:
+    stream_name = os.getenv("AI_PREDICT_STREAM", "ms3:predict:events")
+    maxlen = int(os.getenv("AI_PREDICT_STREAM_MAXLEN", "1000"))
+    try:
+        return _get_redis_client().xadd(
+            stream_name,
+            {
+                "payload": json.dumps(payload, separators=(",", ":")),
+                "device_id": str(payload.get("device_id", "")),
+                "anomaly_score": str(payload.get("anomaly_score", 0.0)),
+                "risk_level": str(payload.get("risk_level", "low")),
+                "model": str(payload.get("model", "")),
+            },
+            maxlen=maxlen,
+            approximate=True,
+        )
+    except Exception as exc:
+        logger.warning("Failed to publish device prediction event: %s", exc)
+        return None
 
 
 def get_pipeline():
@@ -209,3 +257,61 @@ def run_inference_sensor(
             f"[{device_id}/{sensor_name}] Inference failed: {exc}", exc_info=True
         )
         return _zero
+
+
+@celery_app.task(name="app.tasks.run_device_prediction")
+def run_device_prediction(device_id: str, records: List[Dict]) -> Dict:
+    """
+    Queue entry point for MS3's MS2 polling pipeline.
+
+    Receives one device's recent telemetry readings, runs per-sensor inference,
+    aggregates the highest score for the device, and publishes one prediction
+    event to the Redis Stream read by /predict/event.
+    """
+    timestamp = datetime.now(timezone.utc).isoformat()
+    if not records:
+        payload = {
+            "device_id": device_id,
+            "anomaly_score": 0.0,
+            "risk_level": "low",
+            "model": "chronos-device-pipeline",
+            "per_device": {
+                device_id: {
+                    "anomaly_score": 0.0,
+                    "per_sensor": {},
+                }
+            },
+            "timestamp": timestamp,
+        }
+        _publish_device_prediction_event(payload)
+        return payload
+
+    df_check = pd.DataFrame(records)
+    available = [
+        sensor
+        for sensor in SENSOR_NAMES
+        if sensor in df_check.columns and df_check[sensor].notna().any()
+    ]
+
+    per_sensor: Dict[str, float] = {}
+    for sensor in available:
+        result = run_inference_sensor(device_id, sensor, records)
+        per_sensor[sensor] = round(float(result.get("score", 0.0)), 4)
+
+    anomaly_score = round(max(per_sensor.values(), default=0.0), 4)
+    payload = {
+        "device_id": device_id,
+        "anomaly_score": anomaly_score,
+        "risk_level": _risk_level(anomaly_score),
+        "model": "chronos-device-pipeline",
+        "per_device": {
+            device_id: {
+                "anomaly_score": anomaly_score,
+                "per_sensor": per_sensor,
+            }
+        },
+        "timestamp": timestamp,
+    }
+    stream_id = _publish_device_prediction_event(payload)
+    payload["stream_id"] = stream_id
+    return payload

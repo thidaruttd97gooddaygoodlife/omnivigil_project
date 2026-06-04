@@ -5,7 +5,24 @@ import { useAuth } from '@/context/AuthContext';
 import { generateSensorData, AnomalyEvent } from '@/lib/mockData';
 import { aiApi } from '@/lib/api';
 import { Brain, AlertTriangle, CheckCircle, Clock, Eye } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+type PredictEventItem = {
+    stream_id?: string;
+    event_id?: string;
+    per_device?: Record<string, unknown>;
+    timestamp: string;
+    risk_level?: string;
+    anomaly_score: number;
+    alert_id?: string | null;
+    work_order_id?: string | null;
+};
+
+const riskLevels: AnomalyEvent['severity'][] = ['critical', 'high', 'medium', 'low'];
+
+function isRiskLevel(value: string | undefined): value is AnomalyEvent['severity'] {
+    return riskLevels.includes(value as AnomalyEvent['severity']);
+}
 
 export default function AnomalyPage() {
     const { hasAccess, isDemoMode } = useAuth();
@@ -27,24 +44,29 @@ export default function AnomalyPage() {
             }
 
             try {
-                const res = await aiApi.get('/events');
-                const apiEvents: AnomalyEvent[] = res.data.items.map((item: any) => ({
-                    id: item.event_id,
-                    machineId: 'm1', // MS3 does not return machine ID currently
-                    machineName: 'System (AI Engine)',
-                    timestamp: item.timestamp,
-                    type: 'AI Anomaly Detected',
-                    severity: item.risk_level === 'high' || item.risk_level === 'critical' ? item.risk_level : 'medium',
-                    description: `AI Engine detected a pattern shift. Score: ${item.anomaly_score}. Auto-alert: ${item.alert_id || 'None'}. Auto-WO: ${item.work_order_id || 'None'}`,
-                    aiConfidence: Math.round(item.anomaly_score * 100),
-                    recommendedAction: 'Check MS5 Maintenance for generated work orders.',
-                    status: 'new',
-                    sensorType: 'Multiple',
-                    actualValue: item.anomaly_score,
-                    expectedRange: '< 0.5',
-                }));
+                const res = await aiApi.get('/predict/event');
+                const apiEvents: AnomalyEvent[] = res.data.items.map((item: PredictEventItem) => {
+                    const machineId = Object.keys(item.per_device || {})[0] || 'm1';
+                    const riskLevel: AnomalyEvent['severity'] = isRiskLevel(item.risk_level) ? item.risk_level : 'medium';
+
+                    return {
+                        id: item.stream_id || item.event_id || `${machineId}-${item.timestamp}`,
+                        machineId,
+                        machineName: `System (AI Engine) - ${machineId}`,
+                        timestamp: item.timestamp,
+                        type: 'AI Anomaly Detected',
+                        severity: riskLevel,
+                        description: `AI Engine detected a pattern shift. Score: ${item.anomaly_score}. Auto-alert: ${item.alert_id || 'None'}. Auto-WO: ${item.work_order_id || 'None'}`,
+                        aiConfidence: Math.round(item.anomaly_score * 100),
+                        recommendedAction: 'Check MS5 Maintenance for generated work orders.',
+                        status: 'new',
+                        sensorType: 'Multiple',
+                        actualValue: item.anomaly_score,
+                        expectedRange: '< 0.5',
+                    };
+                });
                 setAnomalies([...apiEvents.reverse()]);
-            } catch (err) {
+            } catch {
                 console.error('Failed to fetch MS3 AI events');
             }
         };
