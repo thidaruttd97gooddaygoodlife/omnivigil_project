@@ -25,6 +25,6 @@ dist/
 .vscode/
 # Logs
 *.log
-
-#vs code 
-.vscode/
+.worktrees/
+.agents/private/
+docs/superpowers

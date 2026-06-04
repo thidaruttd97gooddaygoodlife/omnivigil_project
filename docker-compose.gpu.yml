@@ -1,0 +1,9 @@
+services:
+  ms3-worker:
+    build:
+      args:
+        INSTALL_ML: "true"
+        TORCH_INDEX_URL: ${MS3_GPU_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}
+    gpus: all
+    environment:
+      CHRONOS_DEVICE: cuda

@@ -9,6 +9,7 @@ This service is split into two components to handle heavy ML inference efficient
 
 ## Infrastructure Requirements
 - **Redis**: Used as the message broker and result backend for Celery.
+- **PostgreSQL**: Stores historical anomaly events for persistence.
 - **GPU (Optional but Recommended)**: The worker uses CUDA if available for faster inference.
 
 ## Detailed Workflow
@@ -22,18 +23,20 @@ This service is split into two components to handle heavy ML inference efficient
     -   The **Chronos Forecasting** model predicts the next 24 data points (the next 4 minutes of machine behavior).
     -   The predicted trends are evaluated against engineering thresholds to calculate a "Proactive Anomaly Score".
 5.  **Result Aggregation**: The Web API awaits the worker's result (or a timeout). It then combines the immediate and proactive scores to determine the final `risk_level` (Low, Medium, High, Critical).
-6.  **Action Triggering**: If the risk is High or Critical, the service automatically dispatches alerts (via MS4) and creates work orders (via MS5).
+6.  **Action Triggering**: If the risk is Medium, High, or Critical, the service automatically creates work orders (via MS5). Medium anomalies create medium-priority work orders without dispatching alerts, while High and Critical anomalies dispatch alerts (via MS4) and create high-priority work orders.
 
 ## Endpoints
 - `GET /health`: Service health status and operational mode (web/worker).
 - `POST /analyze`: Main inference endpoint. Triggers background forecasting and returns risk levels.
-- `GET /events`: Retrieval of recent high-risk anomaly events.
+- `GET /events`: Retrieval of recent high-risk anomaly events from the PostgreSQL database.
 - `POST /models/refresh`: Stub for reloading/refreshing ML models.
 
 ## File Structure & Descriptions
 
 ### Core Application (`app/`)
 -   **`main.py`**: The entry point for the FastAPI web server. It handles HTTP requests, provides the `/analyze` and `/health` endpoints, and coordinates the immediate risk assessment logic. It dispatches heavy ML tasks to the Celery worker pool and awaits results asynchronously.
+-   **`database.py`**: SQLAlchemy configuration, including the engine setup, session management (`SessionLocal`), and the `Base` class for ORM models.
+-   **`models.py`**: SQLAlchemy ORM definitions. Currently contains the `Event` model for persisting anomaly detections.
 -   **`celery_app.py`**: Configures the Celery instance. It defines the Redis broker and backend connection strings and sets up task serialization and time limits.
 -   **`tasks.py`**: Houses the Celery task definitions. This file is loaded by the worker processes. It contains the logic for loading the Chronos model (using `BaseChronosPipeline`) and performing the actual time-series forecasting on resampled telemetry data.
 -   **`worker.py`**: A utility module containing the standalone inference logic and model loading helpers. It serves as a shared logic base and can be used for direct local testing outside of the Celery environment.
@@ -56,4 +59,3 @@ To run the web server:
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8003
 ```
-

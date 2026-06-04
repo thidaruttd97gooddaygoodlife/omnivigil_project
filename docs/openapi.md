@@ -20,6 +20,8 @@ Each service exposes Swagger UI at /docs and OpenAPI JSON at /openapi.json.
 - GET /health
 - POST /ingest
 - POST /ingest/analyze
+- POST /simulate/batch
+- POST /simulate/fail
 - GET /readings
 
 ## MS3 AI Engine
