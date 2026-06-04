@@ -367,7 +367,7 @@ def _score(reading: TelemetryReading) -> float:
     if reading.power_kw is not None:
         score += max(0.0, (reading.power_kw - 15.0) / 5.0)
     # Normalise (6 sensors contributing → divide by 6)
-    return max(0.0, min(1.0, score / 6.0))
+    return max(0.0, min(1.0, score / 10.0))
 
 
 def _risk_level(score: float) -> str:
@@ -641,6 +641,8 @@ async def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)) -> Ana
         request.telemetry
     )
 
+    logging.info(f"Immediate analysis — device={immediate_device} score={score_current:.4f} risk={immediate_level}")
+
     # ── 1. Group telemetry by device_id ──────────────────────────────────────
     # This ensures ALL devices in the payload are processed,
     # not just the first one.
@@ -677,7 +679,7 @@ async def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)) -> Ana
                     pending.append((device_id, sensor, task))
                 except Exception as exc:
                     logging.warning(f"[{device_id}/{sensor}] Task dispatch failed: {exc}")
-
+    logging.info(f"pending tasks dispatched: {len(pending)}")
     if not pending:
         event_id, alert_id, work_order_id = _record_high_risk_event(
             db,

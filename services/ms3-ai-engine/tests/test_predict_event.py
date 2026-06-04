@@ -183,6 +183,33 @@ class PredictEventRouteTest(unittest.TestCase):
         start_mock.assert_not_called()
         self.assertFalse(result["running"])
 
+    def test_device_prediction_records_high_risk_event_before_publish(self):
+        records = [
+            {
+                "device_id": "pump-1",
+                "timestamp": "2026-06-04T14:00:00+00:00",
+                "temperature_c": 100.0,
+            }
+        ]
+
+        with patch("app.tasks.run_inference_sensor", return_value={"score": 0.8}):
+            with patch(
+                "app.tasks._record_high_risk_event",
+                return_value=("event-1", "alert-1", "wo-1"),
+            ) as record_mock:
+                with patch("app.tasks._publish_device_prediction_event", return_value="stream-1") as publish_mock:
+                    from app.tasks import run_device_prediction
+
+                    result = run_device_prediction("pump-1", records)
+
+        record_mock.assert_called_once_with("pump-1", "critical", 0.8)
+        publish_mock.assert_called_once()
+        published_payload = publish_mock.call_args.args[0]
+        self.assertEqual(published_payload["event_id"], "event-1")
+        self.assertEqual(published_payload["alert_id"], "alert-1")
+        self.assertEqual(published_payload["work_order_id"], "wo-1")
+        self.assertEqual(result["stream_id"], "stream-1")
+
 
 if __name__ == "__main__":
     unittest.main()

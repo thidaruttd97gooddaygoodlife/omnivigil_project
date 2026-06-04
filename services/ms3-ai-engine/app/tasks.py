@@ -23,10 +23,13 @@ NOTE: ms3-worker runs with --concurrency=1 by default.
 import os
 import logging
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 import pandas as pd
 from datetime import datetime, timezone
+import httpx
 from app.celery_app import celery_app
+from app.database import SessionLocal
+from app.models import Event
 from app.sensors import ALL_SENSORS as SENSOR_NAMES, score_sensor_value
 
 try:
@@ -54,6 +57,22 @@ SENSOR_THRESHOLDS: Dict[str, Dict[str, float]] = {}
 # ── Chronos model (lazy-loaded once per worker process) ──────────────────────
 _pipeline = None
 _redis_client = None
+_alert_url = os.getenv("ALERT_URL", "http://localhost:8004")
+_maintenance_url = os.getenv("MAINTENANCE_URL", "http://localhost:8005")
+_machine_service_url = os.getenv("MACHINE_SERVICE_URL", "http://ms6-machine:8006").strip().rstrip("/")
+_require_registered_machine = os.getenv("REQUIRE_REGISTERED_MACHINE", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+SEVERITY_HEALTH_POLICY = {
+    "low": {"health_drop": 0, "health_cap": 100, "ceiling_drop": 0},
+    "medium": {"health_drop": 8, "health_cap": 75, "ceiling_drop": 1},
+    "high": {"health_drop": 20, "health_cap": 55, "ceiling_drop": 3},
+    "critical": {"health_drop": 40, "health_cap": 25, "ceiling_drop": 5},
+}
 
 
 def _risk_level(score: float) -> str:
@@ -64,6 +83,166 @@ def _risk_level(score: float) -> str:
     if score >= 0.30:
         return "medium"
     return "low"
+
+
+def _machine_is_registered(device_id: str) -> bool:
+    if not _require_registered_machine:
+        return True
+
+    normalized = device_id.strip()
+    if not normalized or not _machine_service_url:
+        return False
+
+    try:
+        response = httpx.get(f"{_machine_service_url}/machines/{normalized}", timeout=3.0)
+    except httpx.HTTPError as exc:
+        logger.warning("Machine registry lookup failed for %s: %s", normalized, exc)
+        return False
+
+    if response.status_code == 404:
+        logger.info("Skipping auto maintenance for unregistered machine %s", normalized)
+        return False
+
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Machine registry returned %s for %s: %s", response.status_code, normalized, exc)
+        return False
+
+    return True
+
+
+def _dispatch_alert(device_id: str, level: str, score: float) -> Optional[str]:
+    payload = {
+        "machine_id": device_id,
+        "risk_level": level,
+        "anomaly_score": round(score, 4),
+        "message": "Auto alert from AI engine",
+        "channels": ["line", "toast", "sound"],
+    }
+    try:
+        response = httpx.post(f"{_alert_url}/alerts", json=payload, timeout=5.0)
+        response.raise_for_status()
+        return response.json().get("alert_id")
+    except httpx.HTTPError:
+        return None
+
+
+def _create_work_order(device_id: str, level: str, alert_id: Optional[str]) -> Optional[str]:
+    payload = {
+        "machine_id": device_id,
+        "issue": f"Investigate {level} anomaly",
+        "priority": "high" if level in {"high", "critical"} else "medium",
+        "source_alert_id": alert_id,
+    }
+    try:
+        response = httpx.post(f"{_maintenance_url}/work-orders", json=payload, timeout=5.0)
+        response.raise_for_status()
+        return response.json().get("work_order_id")
+    except httpx.HTTPError:
+        return None
+
+
+def _status_for_health(health_score: int) -> str:
+    if health_score >= 80:
+        return "normal"
+    if health_score >= 50:
+        return "warning"
+    return "critical"
+
+
+def _health_update_for_risk(level: str, machine: dict) -> dict:
+    policy = SEVERITY_HEALTH_POLICY.get(level, SEVERITY_HEALTH_POLICY["low"])
+    current_health = int(machine.get("healthScore", 100))
+    current_ceiling = int(machine.get("healthCeiling", 100))
+    current_failures = int(machine.get("failureCount", 0))
+
+    if level == "low":
+        return {}
+
+    next_health = max(
+        5,
+        min(current_health - int(policy["health_drop"]), int(policy["health_cap"])),
+    )
+    next_ceiling = max(50, current_ceiling - int(policy["ceiling_drop"]))
+    return {
+        "status": _status_for_health(next_health),
+        "healthScore": next_health,
+        "healthCeiling": next_ceiling,
+        "failureCount": current_failures + 1,
+    }
+
+
+def _update_machine_health_from_risk(device_id: str, level: str, score: float) -> Optional[dict]:
+    if not _machine_service_url:
+        return None
+
+    try:
+        machine_response = httpx.get(f"{_machine_service_url}/machines/{device_id}", timeout=3.0)
+        if machine_response.status_code == 404:
+            logger.info("Machine %s disappeared before health update", device_id)
+            return None
+        machine_response.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to read machine %s before health update: %s", device_id, exc)
+        return None
+
+    payload = _health_update_for_risk(level, machine_response.json())
+    if not payload:
+        return machine_response.json()
+
+    try:
+        response = httpx.put(f"{_machine_service_url}/machines/{device_id}", json=payload, timeout=3.0)
+        if response.status_code == 404:
+            logger.info("Machine %s disappeared before health update", device_id)
+            return None
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to update health for machine %s: %s", device_id, exc)
+        return None
+
+
+def _record_high_risk_event(
+    device_id: Optional[str],
+    level: str,
+    score: float,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not device_id or level == "low":
+        return None, None, None
+
+    if not _machine_is_registered(device_id):
+        return None, None, None
+
+    _update_machine_health_from_risk(device_id, level, score)
+    alert_id = None
+    work_order_id = None
+    if level in {"high", "critical"}:
+        alert_id = _dispatch_alert(device_id, level, score)
+    if level in {"medium", "high", "critical"}:
+        work_order_id = _create_work_order(device_id, level, alert_id)
+
+    db = SessionLocal()
+    event_id = None
+    try:
+        db_event = Event(
+            device_id=device_id,
+            risk_level=level,
+            anomaly_score=score,
+            alert_id=alert_id,
+            work_order_id=work_order_id,
+        )
+        db.add(db_event)
+        db.commit()
+        db.refresh(db_event)
+        event_id = str(db_event.event_id)
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed to persist MS3 high-risk event from pipeline: %s", exc)
+    finally:
+        db.close()
+
+    return event_id, alert_id, work_order_id
 
 
 def _get_redis_client():
@@ -299,10 +478,16 @@ def run_device_prediction(device_id: str, records: List[Dict]) -> Dict:
         per_sensor[sensor] = round(float(result.get("score", 0.0)), 4)
 
     anomaly_score = round(max(per_sensor.values(), default=0.0), 4)
+    risk_level = _risk_level(anomaly_score)
+    event_id, alert_id, work_order_id = _record_high_risk_event(
+        device_id,
+        risk_level,
+        anomaly_score,
+    )
     payload = {
         "device_id": device_id,
         "anomaly_score": anomaly_score,
-        "risk_level": _risk_level(anomaly_score),
+        "risk_level": risk_level,
         "model": "chronos-device-pipeline",
         "per_device": {
             device_id: {
@@ -310,6 +495,9 @@ def run_device_prediction(device_id: str, records: List[Dict]) -> Dict:
                 "per_sensor": per_sensor,
             }
         },
+        "event_id": event_id,
+        "alert_id": alert_id,
+        "work_order_id": work_order_id,
         "timestamp": timestamp,
     }
     stream_id = _publish_device_prediction_event(payload)

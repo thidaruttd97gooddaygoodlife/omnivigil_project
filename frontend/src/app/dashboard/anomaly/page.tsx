@@ -32,7 +32,7 @@ export default function AnomalyPage() {
 
     useEffect(() => {
         const fetchEvents = async () => {
-            if (isDemoMode) {
+            if (!isDemoMode) {
                  // Demo Mode: generate fake rich anomaly events
                  const fakeAnomalies: AnomalyEvent[] = [
                     { id: 'ea1', machineId: 'm1', machineName: 'CNC Mill - Alpha (m1)', timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(), type: 'Vibration Spike', severity: 'critical', description: 'Extremely high vibration detected on spindle bearings. Immediate inspection required.', aiConfidence: 98, recommendedAction: 'Stop machine immediately. Inspect spindle bearings for wear or damage. Replace if necessary.', status: 'new', sensorType: 'vibration', actualValue: '12.4 mm/s', expectedRange: '< 4.0 mm/s' },

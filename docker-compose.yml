@@ -220,9 +220,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       ALERT_URL: http://ms4-alert:8004
       MAINTENANCE_URL: http://ms5-maintenance:8005
+      MACHINE_SERVICE_URL: http://ms6-machine:8006
       POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
       AI_WORKER_TASK_TIME_LIMIT_SECONDS: ${AI_WORKER_TASK_TIME_LIMIT_SECONDS:-900}
       AI_PREDICT_STREAM: ${AI_PREDICT_STREAM:-ms3:predict:events}
+      REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
       CHRONOS_MODEL_ID: ${CHRONOS_MODEL_ID:-Stalemartyr/chronos-finetuned}
       CHRONOS_DEVICE: ${CHRONOS_DEVICE:-cuda}
       HF_HOME: /cache/huggingface
@@ -234,6 +236,8 @@ services:
       redis:
         condition: service_healthy
       ms3-ai-DB:
+        condition: service_healthy
+      ms6-machine:
         condition: service_healthy
     deploy:
       resources:
@@ -348,6 +352,7 @@ services:
     environment:
       MACHINE_DATA_FILE: /data/machines.json
       MACHINE_OFFLINE_AFTER_MINUTES: ${MACHINE_OFFLINE_AFTER_MINUTES:-5}
+      MACHINE_SEED_DEFAULTS: ${MACHINE_SEED_DEFAULTS:-true}
     volumes:
       - machine_registry_data:/data
     healthcheck:
