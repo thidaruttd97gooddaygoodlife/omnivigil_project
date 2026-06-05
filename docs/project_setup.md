@@ -9,31 +9,36 @@
 ## 2) Service Order (มาตรฐานใหม่)
 | MS | Service Folder | หน้าที่หลัก |
 |---|---|---|
-| MS1 | `ms1-auth` | Login, JWT, Role Authorization |
+| MS1 | `ms1-auth` | Login, JWT, Role Authorization, Resource Stats |
 | MS2 | `ms2-ingestor` | รับ/clean telemetry และเก็บ InfluxDB |
-| MS3 | `ms3-ai-engine` | วิเคราะห์ anomaly/risk |
-| MS4 | `ms4-alert` | แจ้งเตือนผ่าน LINE/UI |
+| MS3 | `ms3-ai-engine` | วิเคราะห์ anomaly/risk ด้วย Chronos ML |
+| MS4 | `ms4-alert` | แจ้งเตือนผ่าน LINE Flex Message/UI |
 | MS5 | `ms5-maintenance` | จัดการ work order และประวัติซ่อม |
+| MS6 | `ms6-machine` | ทะเบียนประวัติและสเตตัสสุขภาพเครื่องจักร |
 
 ## 3) Infrastructure
 - MQTT (Mosquitto)
 - InfluxDB (Telemetry)
-- Redis (Cache)
+- Redis (Cache & Celery Queue)
 - RabbitMQ (Event Bus)
 - PostgreSQL Auth
 - PostgreSQL Maintenance
+- **Kong API Gateway** (Central Ingress Router)
+- **Prometheus** (Metrics Scraper)
+- **Grafana** (Metrics Visualizer Dashboard)
 
 ## 4) Run System
 ```bash
-docker compose up --build
+docker compose --profile simulator up -d --build
 ```
 
-Swagger ของแต่ละ service:
-- MS1: `http://localhost:8001/docs`
-- MS2: `http://localhost:8002/docs`
-- MS3: `http://localhost:8003/docs`
-- MS4: `http://localhost:8004/docs`
-- MS5: `http://localhost:8005/docs`
+Swagger API Docs (ผ่าน Kong API Gateway พอร์ต 8000):
+- MS1 Auth: `http://localhost:8000/auth-service/docs`
+- MS2 Ingestor: `http://localhost:8000/ingestor-service/docs`
+- MS3 AI Engine: `http://localhost:8000/ai-service/docs`
+- MS4 Alert: `http://localhost:8000/alert-service/docs`
+- MS5 Maintenance: `http://localhost:8000/maintenance-service/docs`
+- MS6 Machine: `http://localhost:8000/machine-service/docs`
 
 ## 5) Coding Baseline
 - ใช้กฎเดียวกันที่ `CONTRIBUTING.md`

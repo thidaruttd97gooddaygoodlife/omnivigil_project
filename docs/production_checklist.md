@@ -18,13 +18,14 @@ docker compose --profile simulator up -d --build
 docker compose ps
 ```
 
-เช็ค API health:
+เช็ค API health (ผ่าน API Gateway พอร์ต 8000):
 ```bash
-curl http://localhost:8001/health
-curl http://localhost:8002/health
-curl http://localhost:8003/health
-curl http://localhost:8004/health
-curl http://localhost:8005/health
+curl http://localhost:8000/auth-service/health
+curl http://localhost:8000/ingestor-service/health
+curl http://localhost:8000/ai-service/health
+curl http://localhost:8000/alert-service/health
+curl http://localhost:8000/maintenance-service/health
+curl http://localhost:8000/machine-service/health
 ```
 
 ## 4) Data Pipeline Validation

@@ -39,8 +39,7 @@
 ## 5) คำสั่งตรวจรับงาน (copy-run)
 ```powershell
 docker compose --profile simulator up -d --build
-curl.exe http://localhost:8002/health
-curl.exe http://localhost:8002/stats
+curl.exe http://localhost:8000/ingestor-service/health
 ```
 
 ## 6) หลักฐานรอบล่าสุด (ตัวอย่าง)
