@@ -10,9 +10,26 @@ from typing import List, Optional
 from uuid import uuid4
 
 import pika
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load Environment Variables
+load_dotenv()
+
+# Import LINE SDK v3 classes
+from linebot.v3.webhook import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import (
+    Configuration,
+    ApiClient,
+    MessagingApi,
+    PushMessageRequest,
+    ReplyMessageRequest,
+    TextMessage
+)
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +47,10 @@ app.add_middleware(
 
 # Configuration
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672//")
+
+# LINE Configuration
+configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN", ""))
+handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET", "dummy_secret"))
 
 
 class AlertRequest(BaseModel):
@@ -53,6 +74,33 @@ _worker_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 
 
+def send_line_notification(machine_id: str, risk_level: str, detail: str) -> None:
+    """Send alert notification via LINE."""
+    access_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    channel_secret = os.getenv("LINE_CHANNEL_SECRET")
+    if not access_token or not channel_secret:
+        logger.warning("LINE credentials not fully configured, skipping LINE notification.")
+        return
+        
+    TARGET_USER_ID = os.getenv("LINE_TARGET_USER_ID")
+    if not TARGET_USER_ID or TARGET_USER_ID.strip() == "":
+        TARGET_USER_ID = "C82453137b46265b4a33a92826f0d74f6"
+    try:
+        from app.line_utils import create_machine_alert_message
+        flex_msg = create_machine_alert_message(machine_id, risk_level, detail)
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.push_message(
+                PushMessageRequest(
+                    to=TARGET_USER_ID,
+                    messages=[flex_msg]
+                )
+            )
+        logger.info(f"LINE notification sent successfully for machine {machine_id}")
+    except Exception as e:
+        logger.error(f"Failed to send LINE notification: {e}")
+
+
 def _rabbitmq_consumer() -> None:
     """Background worker to consume alerts from RabbitMQ."""
     logger.info("RabbitMQ consumer thread started.")
@@ -72,6 +120,16 @@ def _rabbitmq_consumer() -> None:
                     
                     # Store in memory (similar to HTTP request)
                     _alerts.append(payload)
+                    
+                    # Send LINE notification if "line" is in channels
+                    channels = payload.get("channels", ["line", "toast", "sound"])
+                    if "line" in channels:
+                        machine_id = payload.get("machine_id", "Unknown")
+                        risk_level = payload.get("risk_level", "UNKNOWN")
+                        anomaly_score = payload.get("anomaly_score", 0.0)
+                        message = payload.get("message")
+                        detail = message or f"Anomaly Score: {anomaly_score}"
+                        send_line_notification(machine_id, risk_level, detail)
                     
                     # Acknowledge the message
                     ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -105,7 +163,6 @@ def startup() -> None:
 @app.on_event("shutdown")
 def shutdown() -> None:
     _stop_event.set()
-    # Pika connection will eventually time out or we could try to close it if we kept a reference
 
 
 @app.get("/health")
@@ -135,6 +192,11 @@ def create_alert(request: AlertRequest) -> AlertResponse:
     }
     _alerts.append(payload)
 
+    # Check if "line" is in requested channels
+    if "line" in request.channels:
+        detail = request.message or f"Anomaly Score: {request.anomaly_score}"
+        send_line_notification(request.machine_id, request.risk_level, detail)
+
     return AlertResponse(
         alert_id=alert_id,
         status="sent",
@@ -155,3 +217,38 @@ def get_alert(alert_id: str) -> dict:
         if item["alert_id"] == alert_id:
             return item
     return {"error": "not_found"}
+
+
+@app.post("/callback")
+async def callback(request: Request):
+    signature = request.headers.get("X-Line-Signature")
+    body = await request.body()
+    try:
+        handler.handle(body.decode("utf-8"), signature)
+    except InvalidSignatureError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    return "OK"
+
+
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_message(event):
+    source_type = event.source.type
+    
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        if source_type == "group":
+            group_id = event.source.group_id
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=f"Group ID ของกลุ่มนี้คือ: {group_id}")]
+                )
+            )
+        elif source_type == "user":
+            user_id = event.source.user_id
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=f"User ID : {user_id}")]
+                )
+            )

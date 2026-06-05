@@ -2,13 +2,12 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { mockWorkOrders, mockMachines, WorkOrder, Machine } from '@/lib/mockData';
+import { mockMachines, WorkOrder, Machine } from '@/lib/mockData';
 import { maintenanceApi, machineApi } from '@/lib/api';
 import { ClipboardList, Plus, Clock, CheckCircle, AlertTriangle, Loader } from 'lucide-react';
 
-const DEMO_WORK_ORDERS_KEY = 'omnivigil_demo_workorders';
 const PRIORITY_ORDER: Record<WorkOrder['priority'], number> = { urgent: 0, high: 1, medium: 2, low: 3 };
-const DEMO_STATUS_TRANSITIONS: Record<WorkOrder['status'], WorkOrder['status'][]> = {
+const STATUS_TRANSITIONS: Record<WorkOrder['status'], WorkOrder['status'][]> = {
     open: ['open', 'in_progress', 'completed', 'cancelled'],
     in_progress: ['in_progress', 'completed', 'cancelled'],
     completed: ['completed'],
@@ -31,29 +30,6 @@ type ApiWorkOrder = {
     source_alert_id?: string;
 };
 
-const persistDemoOrders = (items: WorkOrder[]) => {
-    localStorage.setItem(DEMO_WORK_ORDERS_KEY, JSON.stringify(items));
-};
-
-const loadDemoOrders = (): WorkOrder[] => {
-    const raw = localStorage.getItem(DEMO_WORK_ORDERS_KEY);
-    if (!raw) {
-        persistDemoOrders(mockWorkOrders);
-        return mockWorkOrders;
-    }
-    try {
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) {
-            persistDemoOrders(mockWorkOrders);
-            return mockWorkOrders;
-        }
-        return parsed as WorkOrder[];
-    } catch {
-        persistDemoOrders(mockWorkOrders);
-        return mockWorkOrders;
-    }
-};
-
 const getCreatedAtTime = (order: WorkOrder) => {
     const timestamp = new Date(order.createdAt).getTime();
     return Number.isFinite(timestamp) ? timestamp : 0;
@@ -68,7 +44,7 @@ const sortWorkOrdersNewestFirst = (items: WorkOrder[]) => {
 };
 
 export default function WorkOrdersPage() {
-    const { hasAccess, user, isDemoMode } = useAuth();
+    const { hasAccess, user } = useAuth();
     const [filter, setFilter] = useState<string>('all');
     const [showModal, setShowModal] = useState(false);
     const [orders, setOrders] = useState<WorkOrder[]>([]);
@@ -76,13 +52,9 @@ export default function WorkOrdersPage() {
     const [form, setForm] = useState({ machineId: '', title: '', description: '', priority: 'medium' as WorkOrder['priority'], assignedTo: '', estimatedHours: 2 });
     const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
     const [editForm, setEditForm] = useState({ assignedTo: '', estimatedHours: '2' });
-    const statusOptionsByState = DEMO_STATUS_TRANSITIONS;
+    const statusOptionsByState = STATUS_TRANSITIONS;
 
     const loadMachines = useCallback(async () => {
-        if (isDemoMode) {
-            setMachines(mockMachines);
-            return;
-        }
         try {
             const res = await machineApi.get('/machines');
             setMachines(res.data);
@@ -90,14 +62,9 @@ export default function WorkOrdersPage() {
             console.error('Failed to load MS6 machines');
             setMachines(mockMachines); // Fallback to mock if API fails
         }
-    }, [isDemoMode]);
+    }, []);
 
     const loadOrders = useCallback(async () => {
-        if (isDemoMode) {
-            setOrders(loadDemoOrders());
-            return;
-        }
-
         try {
             const res = await maintenanceApi.get('/work-orders');
             const apiOrders: WorkOrder[] = (res.data.items as ApiWorkOrder[]).map((item) => {
@@ -127,7 +94,7 @@ export default function WorkOrdersPage() {
         } catch {
             console.error('Failed to load live MS5 work orders');
         }
-    }, [isDemoMode]);
+    }, []);
 
     useEffect(() => { 
         loadMachines();
@@ -157,6 +124,8 @@ export default function WorkOrdersPage() {
         open: orders.filter(o => o.status === 'open').length,
         in_progress: orders.filter(o => o.status === 'in_progress').length,
         completed: orders.filter(o => o.status === 'completed').length,
+        cancelled: orders.filter(o => o.status === 'cancelled').length,
+        total: orders.length,
     };
 
     const statusIcons: Record<string, React.ReactNode> = {
@@ -167,34 +136,7 @@ export default function WorkOrdersPage() {
     };
 
     const handleCreate = async () => {
-        const selectedMachine = machines.find((m) => m.id === form.machineId);
-        const now = new Date().toISOString();
         try {
-            if (isDemoMode) {
-                const newOrder: WorkOrder = {
-                    id: `WO-DEMO-${Date.now()}`,
-                    machineId: form.machineId,
-                    machineName: selectedMachine?.name || form.machineId,
-                    title: form.title.trim(),
-                    description: (form.description || form.title).trim(),
-                    priority: form.priority,
-                    status: 'open',
-                    assignedTo: form.assignedTo.trim() || 'Unassigned',
-                    createdAt: now,
-                    updatedAt: now,
-                    estimatedHours: Number(form.estimatedHours) || 0,
-                };
-
-                setOrders((prev) => {
-                    const updated = [newOrder, ...prev];
-                    persistDemoOrders(updated);
-                    return updated;
-                });
-                setShowModal(false);
-                setForm({ machineId: '', title: '', description: '', priority: 'medium', assignedTo: '', estimatedHours: 2 });
-                return;
-            }
-
             await maintenanceApi.post('/work-orders', {
                 machine_id: form.machineId,
                 issue: form.title,
@@ -216,36 +158,16 @@ export default function WorkOrdersPage() {
         const { id: orderId, status: newStatus } = showConfirm;
 
         try {
-            if (isDemoMode) {
-                setOrders((prev) => {
-                    const updated = prev.map((order) => {
-                        if (order.id !== orderId) return order;
-
-                        const next = newStatus as WorkOrder['status'];
-                        const allowed = DEMO_STATUS_TRANSITIONS[order.status];
-                        if (!allowed.includes(next)) return order;
-
-                        return {
-                            ...order,
-                            status: next,
-                            updatedAt: new Date().toISOString(),
-                        };
-                    });
-                    persistDemoOrders(updated);
-                    return updated;
+            if (newStatus === 'completed') {
+                await maintenanceApi.patch(`/work-orders/${orderId}/complete`, {
+                    action_taken: 'Completed from dashboard',
                 });
+            } else if (newStatus === 'in_progress') {
+                await maintenanceApi.patch(`/work-orders/${orderId}/accept`);
             } else {
-                if (newStatus === 'completed') {
-                    await maintenanceApi.patch(`/work-orders/${orderId}/complete`, {
-                        action_taken: 'Completed from dashboard',
-                    });
-                } else if (newStatus === 'in_progress') {
-                    await maintenanceApi.patch(`/work-orders/${orderId}/accept`);
-                } else {
-                    await maintenanceApi.patch(`/work-orders/${orderId}/status`, { status: newStatus });
-                }
-                await loadOrders();
+                await maintenanceApi.patch(`/work-orders/${orderId}/status`, { status: newStatus });
             }
+            await loadOrders();
         } catch (err) { 
             console.error('Failed to update status', err); 
         } finally {
@@ -280,28 +202,11 @@ export default function WorkOrdersPage() {
         const assignedTo = editForm.assignedTo.trim();
 
         try {
-            if (isDemoMode) {
-                setOrders((prev) => {
-                    const updated = prev.map((order) => (
-                        order.id === orderId
-                            ? {
-                                ...order,
-                                assignedTo: assignedTo || 'Unassigned',
-                                estimatedHours,
-                                updatedAt: new Date().toISOString(),
-                            }
-                            : order
-                    ));
-                    persistDemoOrders(updated);
-                    return updated;
-                });
-            } else {
-                await maintenanceApi.patch(`/work-orders/${orderId}`, {
-                    assigned_to: assignedTo || null,
-                    estimated_hours: estimatedHours,
-                });
-                await loadOrders();
-            }
+            await maintenanceApi.patch(`/work-orders/${orderId}`, {
+                assigned_to: assignedTo || null,
+                estimated_hours: estimatedHours,
+            });
+            await loadOrders();
             cancelAssignmentEdit();
         } catch (err) {
             console.error('Failed to update work order assignment', err);
@@ -337,8 +242,12 @@ export default function WorkOrdersPage() {
                     <div className="stat-value" style={{ color: 'var(--status-normal)' }}>{statusCounts.completed}</div>
                 </div>
                 <div className="stat-card glass-card">
+                    <div className="stat-label">Cancelled</div>
+                    <div className="stat-value" style={{ color: 'var(--status-offline)' }}>{statusCounts.cancelled}</div>
+                </div>
+                <div className="stat-card glass-card">
                     <div className="stat-label">Total</div>
-                    <div className="stat-value" style={{ color: 'var(--text-primary)' }}>{orders.length}</div>
+                    <div className="stat-value" style={{ color: 'var(--text-primary)' }}>{statusCounts.total}</div>
                 </div>
             </div>
 

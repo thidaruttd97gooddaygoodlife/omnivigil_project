@@ -31,7 +31,7 @@ app.add_middleware(
 )
 
 # Configuration
-POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql://omni:omni_password@postgres:5432/maintenance")
+POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql://omni:omni_password@ms5-maintenance-DB:5435/maintenance")
 MACHINE_SERVICE_URL = os.getenv("MACHINE_SERVICE_URL", "http://ms6-machine:8006").strip().rstrip("/")
 JWT_SECRET = os.getenv("JWT_SECRET", "omni_dev_secret_change_me")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")

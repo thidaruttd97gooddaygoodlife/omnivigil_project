@@ -73,11 +73,11 @@ services:
     mem_limit: 512m
     cpus: 0.75
 
-  postgres:
+  ms5-maintenance-DB:
     image: postgres:15-alpine
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5435:5432"
     environment:
       POSTGRES_USER: ${MAINT_POSTGRES_USER:-omni}
       POSTGRES_PASSWORD: ${MAINT_POSTGRES_PASSWORD:-omni_password}
@@ -186,6 +186,11 @@ services:
       POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
       AI_ENABLE_WORKER_INFERENCE: ${AI_ENABLE_WORKER_INFERENCE:-true}
       AI_WORKER_RESULT_TIMEOUT_SECONDS: ${AI_WORKER_RESULT_TIMEOUT_SECONDS:-300}
+      MS2_INGESTOR_URL: http://ms2-ingestor:8002
+      AI_PREDICT_STREAM: ${AI_PREDICT_STREAM:-ms3:predict:events}
+      AI_PIPELINE_AUTO_START: ${AI_PIPELINE_AUTO_START:-true}
+      AI_PIPELINE_INTERVAL_SECONDS: ${AI_PIPELINE_INTERVAL_SECONDS:-30}
+      AI_PIPELINE_MS2_READINGS_LIMIT: ${AI_PIPELINE_MS2_READINGS_LIMIT:-500}
       REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=2)"]
@@ -208,17 +213,20 @@ services:
       context: ./services/ms3-ai-engine
       args:
         INSTALL_ML: ${MS3_INSTALL_ML:-true}
-        TORCH_INDEX_URL: ${MS3_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        TORCH_INDEX_URL: ${MS3_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379/0
       ALERT_URL: http://ms4-alert:8004
       MAINTENANCE_URL: http://ms5-maintenance:8005
+      MACHINE_SERVICE_URL: http://ms6-machine:8006
       POSTGRES_URL: postgresql://${AI_POSTGRES_USER:-omni}:${AI_POSTGRES_PASSWORD:-omni_password}@ms3-ai-DB:5432/${AI_POSTGRES_DB:-ai_engine}
       AI_WORKER_TASK_TIME_LIMIT_SECONDS: ${AI_WORKER_TASK_TIME_LIMIT_SECONDS:-900}
+      AI_PREDICT_STREAM: ${AI_PREDICT_STREAM:-ms3:predict:events}
+      REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
       CHRONOS_MODEL_ID: ${CHRONOS_MODEL_ID:-Stalemartyr/chronos-finetuned}
-      CHRONOS_DEVICE: ${CHRONOS_DEVICE:-auto}
+      CHRONOS_DEVICE: ${CHRONOS_DEVICE:-cuda}
       HF_HOME: /cache/huggingface
     volumes:
       - hf_cache_data:/cache/huggingface
@@ -229,7 +237,15 @@ services:
         condition: service_healthy
       ms3-ai-DB:
         condition: service_healthy
-
+      ms6-machine:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
   ms4-alert:
     build:
       context: ./services/ms4-alert
@@ -238,6 +254,9 @@ services:
       - "8004:8004"
     environment:
       RABBITMQ_URL: amqp://rabbitmq:5672
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET}
+      LINE_TARGET_USER_ID: ${LINE_TARGET_USER_ID}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
       interval: 10s
@@ -257,7 +276,7 @@ services:
     ports:
       - "8005:8005"
     environment:
-      POSTGRES_URL: postgres://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@postgres:5432/${MAINT_POSTGRES_DB:-maintenance}
+      POSTGRES_URL: postgresql://${MAINT_POSTGRES_USER:-omni}:${MAINT_POSTGRES_PASSWORD:-omni_password}@ms5-maintenance-DB:5432/${MAINT_POSTGRES_DB:-maintenance}
       MACHINE_SERVICE_URL: http://ms6-machine:8006
       REQUIRE_REGISTERED_MACHINE: ${REQUIRE_REGISTERED_MACHINE:-true}
       JWT_SECRET: ${JWT_SECRET:-omni_dev_secret_change_me}
@@ -271,7 +290,7 @@ services:
     mem_limit: 256m
     cpus: 0.5
     depends_on:
-      postgres:
+      ms5-maintenance-DB:
         condition: service_healthy
       ms6-machine:
         condition: service_healthy
@@ -333,6 +352,7 @@ services:
     environment:
       MACHINE_DATA_FILE: /data/machines.json
       MACHINE_OFFLINE_AFTER_MINUTES: ${MACHINE_OFFLINE_AFTER_MINUTES:-5}
+      MACHINE_SEED_DEFAULTS: ${MACHINE_SEED_DEFAULTS:-true}
     volumes:
       - machine_registry_data:/data
     healthcheck:

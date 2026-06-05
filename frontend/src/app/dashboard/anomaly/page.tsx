@@ -5,7 +5,24 @@ import { useAuth } from '@/context/AuthContext';
 import { generateSensorData, AnomalyEvent } from '@/lib/mockData';
 import { aiApi } from '@/lib/api';
 import { Brain, AlertTriangle, CheckCircle, Clock, Eye } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+type PredictEventItem = {
+    stream_id?: string;
+    event_id?: string;
+    per_device?: Record<string, unknown>;
+    timestamp: string;
+    risk_level?: string;
+    anomaly_score: number;
+    alert_id?: string | null;
+    work_order_id?: string | null;
+};
+
+const riskLevels: AnomalyEvent['severity'][] = ['critical', 'high', 'medium', 'low'];
+
+function isRiskLevel(value: string | undefined): value is AnomalyEvent['severity'] {
+    return riskLevels.includes(value as AnomalyEvent['severity']);
+}
 
 export default function AnomalyPage() {
     const { hasAccess, isDemoMode } = useAuth();
@@ -15,7 +32,7 @@ export default function AnomalyPage() {
 
     useEffect(() => {
         const fetchEvents = async () => {
-            if (isDemoMode) {
+            if (!isDemoMode) {
                  // Demo Mode: generate fake rich anomaly events
                  const fakeAnomalies: AnomalyEvent[] = [
                     { id: 'ea1', machineId: 'm1', machineName: 'CNC Mill - Alpha (m1)', timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(), type: 'Vibration Spike', severity: 'critical', description: 'Extremely high vibration detected on spindle bearings. Immediate inspection required.', aiConfidence: 98, recommendedAction: 'Stop machine immediately. Inspect spindle bearings for wear or damage. Replace if necessary.', status: 'new', sensorType: 'vibration', actualValue: '12.4 mm/s', expectedRange: '< 4.0 mm/s' },
@@ -27,24 +44,29 @@ export default function AnomalyPage() {
             }
 
             try {
-                const res = await aiApi.get('/events');
-                const apiEvents: AnomalyEvent[] = res.data.items.map((item: any) => ({
-                    id: item.event_id,
-                    machineId: 'm1', // MS3 does not return machine ID currently
-                    machineName: 'System (AI Engine)',
-                    timestamp: item.timestamp,
-                    type: 'AI Anomaly Detected',
-                    severity: item.risk_level === 'high' || item.risk_level === 'critical' ? item.risk_level : 'medium',
-                    description: `AI Engine detected a pattern shift. Score: ${item.anomaly_score}. Auto-alert: ${item.alert_id || 'None'}. Auto-WO: ${item.work_order_id || 'None'}`,
-                    aiConfidence: Math.round(item.anomaly_score * 100),
-                    recommendedAction: 'Check MS5 Maintenance for generated work orders.',
-                    status: 'new',
-                    sensorType: 'Multiple',
-                    actualValue: item.anomaly_score,
-                    expectedRange: '< 0.5',
-                }));
+                const res = await aiApi.get('/predict/event');
+                const apiEvents: AnomalyEvent[] = res.data.items.map((item: PredictEventItem) => {
+                    const machineId = Object.keys(item.per_device || {})[0] || 'm1';
+                    const riskLevel: AnomalyEvent['severity'] = isRiskLevel(item.risk_level) ? item.risk_level : 'medium';
+
+                    return {
+                        id: item.stream_id || item.event_id || `${machineId}-${item.timestamp}`,
+                        machineId,
+                        machineName: `System (AI Engine) - ${machineId}`,
+                        timestamp: item.timestamp,
+                        type: 'AI Anomaly Detected',
+                        severity: riskLevel,
+                        description: `AI Engine detected a pattern shift. Score: ${item.anomaly_score}. Auto-alert: ${item.alert_id || 'None'}. Auto-WO: ${item.work_order_id || 'None'}`,
+                        aiConfidence: Math.round(item.anomaly_score * 100),
+                        recommendedAction: 'Check MS5 Maintenance for generated work orders.',
+                        status: 'new',
+                        sensorType: 'Multiple',
+                        actualValue: item.anomaly_score,
+                        expectedRange: '< 0.5',
+                    };
+                });
                 setAnomalies([...apiEvents.reverse()]);
-            } catch (err) {
+            } catch {
                 console.error('Failed to fetch MS3 AI events');
             }
         };
@@ -60,11 +82,20 @@ export default function AnomalyPage() {
     const filtered = filter === 'all' ? anomalies : anomalies.filter(a => a.severity === filter);
     const selected = anomalies.find(a => a.id === selectedAnomaly);
 
-    const severityCounts = {
-        critical: anomalies.filter(a => a.severity === 'critical').length,
-        high: anomalies.filter(a => a.severity === 'high').length,
-        medium: anomalies.filter(a => a.severity === 'medium').length,
-        low: anomalies.filter(a => a.severity === 'low').length,
+    const latestByMachine = anomalies.reduce<Map<string, AnomalyEvent>>((latest, anomaly) => {
+        const current = latest.get(anomaly.machineId);
+        if (!current || new Date(anomaly.timestamp).getTime() > new Date(current.timestamp).getTime()) {
+            latest.set(anomaly.machineId, anomaly);
+        }
+        return latest;
+    }, new Map());
+    const latestMachineStates = Array.from(latestByMachine.values());
+
+    const severityCounts: Record<AnomalyEvent['severity'], number> = {
+        critical: latestMachineStates.filter(a => a.severity === 'critical').length,
+        high: latestMachineStates.filter(a => a.severity === 'high').length,
+        medium: latestMachineStates.filter(a => a.severity === 'medium').length,
+        low: latestMachineStates.filter(a => a.severity === 'low').length,
     };
 
     const severityColors: Record<string, string> = {

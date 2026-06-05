@@ -20,6 +20,12 @@ app.add_middleware(
 
 DATA_FILE = Path(os.getenv("MACHINE_DATA_FILE", "/data/machines.json"))
 OFFLINE_AFTER_MINUTES = float(os.getenv("MACHINE_OFFLINE_AFTER_MINUTES", "5"))
+SEED_DEFAULT_MACHINES = os.getenv("MACHINE_SEED_DEFAULTS", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 class MachineCreate(BaseModel):
     id: Optional[str] = None
@@ -56,6 +62,64 @@ class Machine(MachineCreate):
 
 # In-memory storage for demo purposes (normally this would be PostgreSQL)
 _machines: List[dict] = []
+
+DEFAULT_MACHINES: List[dict] = [
+    {
+        "id": "mix-pump-101",
+        "name": "Mix Pump 101",
+        "type": "centrifugal_pump",
+        "location": "mixing / A1",
+        "model": "CP-285",
+        "serialNumber": "MIX-PUMP-101",
+        "installDate": "2024-01-15",
+        "status": "normal",
+        "healthScore": 100,
+    },
+    {
+        "id": "filling-comp-201",
+        "name": "Filling Compressor 201",
+        "type": "air_compressor",
+        "location": "filling / B2",
+        "model": "AC-760",
+        "serialNumber": "FILL-COMP-201",
+        "installDate": "2024-02-20",
+        "status": "normal",
+        "healthScore": 100,
+    },
+    {
+        "id": "cnc-spindle-301",
+        "name": "CNC Spindle 301",
+        "type": "cnc_spindle",
+        "location": "machining / C3",
+        "model": "CNC-SP-10800",
+        "serialNumber": "CNC-SPINDLE-301",
+        "installDate": "2024-03-10",
+        "status": "normal",
+        "healthScore": 100,
+    },
+    {
+        "id": "boiler-feed-401",
+        "name": "Boiler Feed Pump 401",
+        "type": "boiler_feed_pump",
+        "location": "utilities / U1",
+        "model": "BFP-118",
+        "serialNumber": "BOILER-FEED-401",
+        "installDate": "2024-04-05",
+        "status": "normal",
+        "healthScore": 100,
+    },
+    {
+        "id": "pack-conveyor-501",
+        "name": "Packaging Conveyor 501",
+        "type": "conveyor_gearmotor",
+        "location": "packaging / D1",
+        "model": "CV-92",
+        "serialNumber": "PACK-CONVEYOR-501",
+        "installDate": "2024-05-12",
+        "status": "normal",
+        "healthScore": 100,
+    },
+]
 
 
 def _normalize_machine(machine: dict) -> dict:
@@ -128,6 +192,25 @@ def _load_machines() -> None:
         print(f"[ms6-machine] Failed to load machine registry: {exc}")
 
 
+def _seed_default_machines() -> None:
+    if not SEED_DEFAULT_MACHINES:
+        return
+
+    existing_ids = {machine.get("id") for machine in _machines}
+    added = False
+    for machine in DEFAULT_MACHINES:
+        if machine["id"] in existing_ids:
+            continue
+
+        seeded = dict(machine)
+        seeded["lastMaintenance"] = datetime.now(timezone.utc).date().isoformat()
+        _machines.append(_normalize_machine(seeded))
+        added = True
+
+    if added:
+        _save_machines()
+
+
 def _save_machines() -> None:
     try:
         DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +222,7 @@ def _save_machines() -> None:
 @app.on_event("startup")
 def startup():
     _load_machines()
+    _seed_default_machines()
 
 
 @app.get("/health")
