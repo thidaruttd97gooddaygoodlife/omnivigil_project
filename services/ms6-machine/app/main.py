@@ -1,13 +1,58 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
+import logging
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from pathlib import Path
-import json
-import os
+from typing import List, Optional
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "service": record.name,
+            "message": record.getMessage()
+        }
+        if record.exc_info:
+            log_record["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_record)
+
+def setup_structured_logging(service_name: str):
+    logger = logging.getLogger(service_name)
+    logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+    handler = logging.StreamHandler()
+    if os.getenv("LOG_FORMAT", "").upper() == "JSON":
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(
+            fmt="[%(asctime)s] [%(levelname)-8s] [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+    logger.addHandler(handler)
+    logger.propagate = False
+    
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root_handler = logging.StreamHandler()
+    if os.getenv("LOG_FORMAT", "").upper() == "JSON":
+        root_handler.setFormatter(JSONFormatter())
+    else:
+        root_handler.setFormatter(logging.Formatter(
+            fmt="[%(asctime)s] [%(levelname)-8s] [root] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+    root.addHandler(root_handler)
+    root.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+    return logger
+
+logger = setup_structured_logging("ms6-machine")
 app = FastAPI(title="MS6 Machine System", version="0.1.0")
 
 app.add_middleware(

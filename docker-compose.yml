@@ -239,13 +239,13 @@ services:
         condition: service_healthy
       ms6-machine:
         condition: service_healthy
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: 1
+#              capabilities: [gpu]
   ms4-alert:
     build:
       context: ./services/ms4-alert
@@ -364,6 +364,49 @@ services:
     mem_limit: 256m
     cpus: 0.5
 
+  kong:
+    image: kong:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"     # HTTP Proxy
+      - "8443:8443"     # HTTPS Proxy
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/declarative/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_PLUGINS: bundled
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+    volumes:
+      - ./infra/kong:/usr/local/kong/declarative
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - kong
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+
 volumes:
   influxdb_data:
   redis_data:
@@ -373,3 +416,4 @@ volumes:
   postgres_ai_data:
   hf_cache_data:
   machine_registry_data:
+  grafana_data:

@@ -37,12 +37,51 @@ try:
 except ImportError:  # pragma: no cover - dependency is present in the service image
     redis = None
 
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "service": record.name,
+            "message": record.getMessage()
+        }
+        if record.exc_info:
+            log_record["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_record)
+
+def setup_structured_logging(service_name: str):
+    logger = logging.getLogger(service_name)
+    logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+    handler = logging.StreamHandler()
+    if os.getenv("LOG_FORMAT", "").upper() == "JSON":
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(
+            fmt="[%(asctime)s] [%(levelname)-8s] [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+    logger.addHandler(handler)
+    logger.propagate = False
+    
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root_handler = logging.StreamHandler()
+    if os.getenv("LOG_FORMAT", "").upper() == "JSON":
+        root_handler.setFormatter(JSONFormatter())
+    else:
+        root_handler.setFormatter(logging.Formatter(
+            fmt="[%(asctime)s] [%(levelname)-8s] [root] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+    root.addHandler(root_handler)
+    root.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+    return logger
+
 # Configure logging
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
-logger = logging.getLogger("ms3-tasks")
+logger = setup_structured_logging("ms3-tasks")
 
 # ── Sensor catalogue ────────────────────────────────────────────────────────
 # All 9 sensors this system monitors. main.py uses this list to decide which
@@ -112,12 +151,12 @@ def _machine_is_registered(device_id: str) -> bool:
     return True
 
 
-def _dispatch_alert(device_id: str, level: str, score: float) -> Optional[str]:
+def _dispatch_alert(device_id: str, level: str, score: float, message: Optional[str] = None) -> Optional[str]:
     payload = {
         "machine_id": device_id,
         "risk_level": level,
         "anomaly_score": round(score, 4),
-        "message": "Auto alert from AI engine",
+        "message": message or "Auto alert from AI engine",
         "channels": ["line", "toast", "sound"],
     }
     try:
@@ -207,6 +246,7 @@ def _record_high_risk_event(
     device_id: Optional[str],
     level: str,
     score: float,
+    message: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not device_id or level == "low":
         return None, None, None
@@ -218,7 +258,7 @@ def _record_high_risk_event(
     alert_id = None
     work_order_id = None
     if level in {"high", "critical"}:
-        alert_id = _dispatch_alert(device_id, level, score)
+        alert_id = _dispatch_alert(device_id, level, score, message)
     if level in {"medium", "high", "critical"}:
         work_order_id = _create_work_order(device_id, level, alert_id)
 
@@ -479,10 +519,41 @@ def run_device_prediction(device_id: str, records: List[Dict]) -> Dict:
 
     anomaly_score = round(max(per_sensor.values(), default=0.0), 4)
     risk_level = _risk_level(anomaly_score)
+
+    # Determine highest anomaly sensor and create rich description
+    highest_sensor = max(per_sensor, key=per_sensor.get, default="None")
+    latest_val = "N/A"
+    if records and highest_sensor in records[-1]:
+        latest_val = str(records[-1][highest_sensor])
+
+    cause = "Anomalous operation detected"
+    action = "Perform general maintenance diagnostics."
+    if highest_sensor == "temperature_c":
+        cause = f"Overheating detected ({latest_val}°C)"
+        action = "Check cooling fan, inspect lubricant level, and clean dust filters."
+    elif highest_sensor == "vibration_rms":
+        cause = f"High vibration detected ({latest_val} mm/s)"
+        action = "Check alignment of shaft, tighten mounting bolts, and inspect bearings."
+    elif highest_sensor == "rpm":
+        cause = f"Abnormal rotation speed ({latest_val} RPM)"
+        action = "Check motor drive settings, verify belt tension, and inspect power supply."
+    elif highest_sensor == "pressure_bar":
+        cause = f"Abnormal pressure ({latest_val} bar)"
+        action = "Inspect pressure valves, check for leaks in pipes, and verify pump capacity."
+
+    detail_payload = {
+        "sensor": highest_sensor,
+        "value": latest_val,
+        "cause": cause,
+        "action": action
+    }
+    detail_message = json.dumps(detail_payload)
+
     event_id, alert_id, work_order_id = _record_high_risk_event(
         device_id,
         risk_level,
         anomaly_score,
+        detail_message,
     )
     payload = {
         "device_id": device_id,

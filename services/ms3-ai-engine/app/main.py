@@ -26,11 +26,50 @@ from app.models import Event
 from app.celery_app import celery_app
 from app.sensors import ALL_SENSORS, score_sensor_value
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "service": record.name,
+            "message": record.getMessage()
+        }
+        if record.exc_info:
+            log_record["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_record)
 
+def setup_structured_logging(service_name: str):
+    logger = logging.getLogger(service_name)
+    logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+    handler = logging.StreamHandler()
+    if os.getenv("LOG_FORMAT", "").upper() == "JSON":
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(
+            fmt="[%(asctime)s] [%(levelname)-8s] [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+    logger.addHandler(handler)
+    logger.propagate = False
+    
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root_handler = logging.StreamHandler()
+    if os.getenv("LOG_FORMAT", "").upper() == "JSON":
+        root_handler.setFormatter(JSONFormatter())
+    else:
+        root_handler.setFormatter(logging.Formatter(
+            fmt="[%(asctime)s] [%(levelname)-8s] [root] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+    root.addHandler(root_handler)
+    root.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+    return logger
+
+logger = setup_structured_logging("ms3-ai-engine")
 app = FastAPI(title="MS3 AI Engine (Web Server)", version="0.2.0")
 
 app.add_middleware(
@@ -414,12 +453,12 @@ def _immediate_result(
     return worst_device, worst_score, _risk_level(worst_score), per_device
 
 
-def _dispatch_alert(device_id: str, level: str, score: float) -> Optional[str]:
+def _dispatch_alert(device_id: str, level: str, score: float, message: Optional[str] = None) -> Optional[str]:
     payload = {
         "machine_id": device_id,
         "risk_level": level,
         "anomaly_score": round(score, 4),
-        "message": "Auto alert from AI engine",
+        "message": message or "Auto alert from AI engine",
         "channels": ["line", "toast", "sound"],
     }
     try:
@@ -552,6 +591,7 @@ def _record_high_risk_event(
     device_id: Optional[str],
     level: str,
     score: float,
+    message: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not device_id or level == "low":
         return None, None, None
@@ -563,7 +603,7 @@ def _record_high_risk_event(
     alert_id = None
     work_order_id = None
     if level in {"high", "critical"}:
-        alert_id = _dispatch_alert(device_id, level, score)
+        alert_id = _dispatch_alert(device_id, level, score, message)
     if level in {"medium", "high", "critical"}:
         work_order_id = _create_work_order(device_id, level, alert_id)
     event_id = None
@@ -641,6 +681,63 @@ def predict_pipeline_stop() -> dict:
     return _stop_predict_pipeline()
 
 
+def _get_detailed_message(device_id: str, telemetry: List[TelemetryReading], per_device_info: Dict[str, DeviceResult]) -> Optional[str]:
+    device_readings = [r for r in telemetry if r.device_id == device_id]
+    if not device_readings:
+        return None
+    latest_reading = device_readings[-1]
+    
+    dev_info = per_device_info.get(device_id)
+    if not dev_info:
+        return None
+        
+    per_sensor = dev_info.per_sensor
+    highest_sensor = "None"
+    if "threshold" in per_sensor and len(per_sensor) == 1:
+        highest_score = -1.0
+        for sensor_name in ALL_SENSORS:
+            val = getattr(latest_reading, sensor_name, None)
+            if val is not None:
+                score = score_sensor_value(float(val), sensor_name)
+                if score > highest_score:
+                    highest_score = score
+                    highest_sensor = sensor_name
+    else:
+        filtered_scores = {k: v for k, v in per_sensor.items() if k != "threshold"}
+        if filtered_scores:
+            highest_sensor = max(filtered_scores, key=filtered_scores.get)
+        else:
+            highest_sensor = "None"
+            
+    latest_val = "N/A"
+    val = getattr(latest_reading, highest_sensor, None) if highest_sensor != "None" else None
+    if val is not None:
+        latest_val = str(val)
+        
+    cause = "Anomalous operation detected"
+    action = "Perform general maintenance diagnostics."
+    if highest_sensor == "temperature_c":
+        cause = f"Overheating detected ({latest_val}°C)"
+        action = "Check cooling fan, inspect lubricant level, and clean dust filters."
+    elif highest_sensor == "vibration_rms":
+        cause = f"High vibration detected ({latest_val} mm/s)"
+        action = "Check alignment of shaft, tighten mounting bolts, and inspect bearings."
+    elif highest_sensor == "rpm":
+        cause = f"Abnormal rotation speed ({latest_val} RPM)"
+        action = "Check motor drive settings, verify belt tension, and inspect power supply."
+    elif highest_sensor == "pressure_bar":
+        cause = f"Abnormal pressure ({latest_val} bar)"
+        action = "Inspect pressure valves, check for leaks in pipes, and verify pump capacity."
+        
+    detail_payload = {
+        "sensor": highest_sensor,
+        "value": latest_val,
+        "cause": cause,
+        "action": action
+    }
+    return json.dumps(detail_payload)
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)) -> AnalyzeResponse:
     if not request.telemetry:
@@ -690,11 +787,13 @@ async def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)) -> Ana
                     logging.warning(f"[{device_id}/{sensor}] Task dispatch failed: {exc}")
     logging.info(f"pending tasks dispatched: {len(pending)}")
     if not pending:
+        detail_msg = _get_detailed_message(immediate_device, request.telemetry, immediate_per_device) if immediate_device else None
         event_id, alert_id, work_order_id = _record_high_risk_event(
             db,
             immediate_device,
             immediate_level,
             score_current,
+            detail_msg,
         )
         response = AnalyzeResponse(
             anomaly_score=round(score_current, 4),
@@ -756,11 +855,13 @@ async def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)) -> Ana
 
     event_id = alert_id = work_order_id = None
     if imm_level in {"medium", "high", "critical"}:
+        detail_msg = _get_detailed_message(worst_device, request.telemetry, per_device)
         event_id, alert_id, work_order_id = _record_high_risk_event(
             db,
             worst_device,
             imm_level,
             score_current,
+            detail_msg,
         )
 
     logging.info(

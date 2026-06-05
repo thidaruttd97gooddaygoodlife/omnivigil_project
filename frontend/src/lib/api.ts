@@ -1,12 +1,17 @@
 import axios from 'axios';
 
-// Base URLs for Microservices
-const MS1_AUTH = 'http://localhost:8001';
-const MS2_INGESTOR = 'http://localhost:8002';
-const MS3_AI = 'http://localhost:8003';
-const MS4_ALERT = 'http://localhost:8004';
-const MS5_MAINTENANCE = 'http://localhost:8005';
-const MS6_MACHINE = 'http://localhost:8006';
+// Central API Gateway URL
+const API_GATEWAY = typeof window !== 'undefined'
+  ? `${window.location.protocol}//${window.location.hostname}:8000`
+  : 'http://localhost:8000';
+
+// Base URLs for Microservices (routed through Kong API Gateway)
+const MS1_AUTH = `${API_GATEWAY}/auth-service`;
+const MS2_INGESTOR = `${API_GATEWAY}/ingestor-service`;
+const MS3_AI = `${API_GATEWAY}/ai-service`;
+const MS4_ALERT = `${API_GATEWAY}/alert-service`;
+const MS5_MAINTENANCE = `${API_GATEWAY}/maintenance-service`;
+const MS6_MACHINE = `${API_GATEWAY}/machine-service`;
 
 // Add interceptor to attach token
 const attachToken = (config: any) => {
